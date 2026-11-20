@@ -106,7 +106,7 @@ export function NoteActions({
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
         title={`删除“${note.title}”？`}
-        description="删除后无法恢复。"
+        description="移入回收站，30 天内可恢复，之后自动清除。"
         confirmText="删除"
         danger
         onConfirm={async () => {
@@ -114,7 +114,7 @@ export function NoteActions({
           localStorage.removeItem(`draft:${note.id}`);
           qc.removeQueries({ queryKey: keys.note(note.id) });
           invalidate();
-          toast.success("已删除");
+          toast.success("已移入回收站");
           if (onDeleted) onDeleted();
           else if (location.pathname === `/app/notes/${note.id}`) navigate("/app/notes");
         }}

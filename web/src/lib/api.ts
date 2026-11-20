@@ -1,5 +1,9 @@
 import type {
+  Annotation,
+  AnnotationInput,
+  AnnotationPage,
   ArchiveItem,
+  DayCount,
   Me,
   Note,
   NoteFlags,
@@ -8,10 +12,12 @@ import type {
   Notebook,
   Preview,
   PublicNote,
+  Revision,
   Settings,
   Site,
   Stats,
   Tag,
+  TrashItem,
   UploadedFile,
 } from "./types";
 
@@ -110,7 +116,26 @@ export const api = {
   updateNote: (id: number, input: NoteInput) => request<Note>("PUT", `/api/admin/notes/${id}`, input),
   patchNote: (id: number, flags: NoteFlags) => request<void>("PATCH", `/api/admin/notes/${id}`, flags),
   deleteNote: (id: number) => request<void>("DELETE", `/api/admin/notes/${id}`),
+  restoreNote: (id: number) => request<void>("POST", `/api/admin/notes/${id}/restore`),
+  purgeNote: (id: number) => request<void>("DELETE", `/api/admin/notes/${id}/purge`),
+  trash: () => request<TrashItem[]>("GET", "/api/admin/trash"),
+  revisions: (id: number) => request<Revision[]>("GET", `/api/admin/notes/${id}/revisions`),
+  restoreRevision: (id: number, rid: number) =>
+    request<Note>("POST", `/api/admin/notes/${id}/revisions/${rid}/restore`),
+  daily: (date: string) => request<Note>("GET", `/api/admin/daily/${date}`),
+  heatmap: (from: string, to: string) =>
+    request<DayCount[]>("GET", "/api/admin/stats/heatmap" + qs({ from, to })),
   preview: (contentMd: string) => request<Preview>("POST", "/api/admin/preview", { contentMd }),
+
+  // Annotations
+  annotations: (noteId: number) => request<Annotation[]>("GET", `/api/admin/notes/${noteId}/annotations`),
+  createAnnotation: (noteId: number, input: AnnotationInput) =>
+    request<Annotation>("POST", `/api/admin/notes/${noteId}/annotations`, input),
+  updateAnnotation: (id: number, input: AnnotationInput) =>
+    request<Annotation>("PUT", `/api/admin/annotations/${id}`, input),
+  deleteAnnotation: (id: number) => request<void>("DELETE", `/api/admin/annotations/${id}`),
+  annotationList: (p: { color?: string; notebook?: number; q?: string; page?: number }) =>
+    request<AnnotationPage>("GET", "/api/admin/annotations" + qs(p)),
 
   // Notebooks & tags
   notebooks: () => request<Notebook[]>("GET", "/api/admin/notebooks"),

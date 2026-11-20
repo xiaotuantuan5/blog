@@ -17,9 +17,9 @@ type Tag struct {
 // ListTags returns tags with note counts. With publicOnly, only public
 // notes are counted and tags without public notes are omitted.
 func (a *App) ListTags(ctx context.Context, publicOnly bool) ([]Tag, error) {
-	cond := ""
+	cond := "WHERE n.deleted_at IS NULL"
 	if publicOnly {
-		cond = "WHERE n.visibility = 'public'"
+		cond = "WHERE n.visibility = 'public' AND n.deleted_at IS NULL"
 	}
 	rows, err := a.DB.QueryContext(ctx, `
 		SELECT t.id, t.name, COUNT(n.id)
@@ -119,16 +119,19 @@ type Stats struct {
 	Notebooks int `json:"notebooks"`
 	Tags      int `json:"tags"`
 	Files     int `json:"files"`
+	Trash     int `json:"trash"`
 }
 
 func (a *App) Stats(ctx context.Context) (Stats, error) {
 	var s Stats
 	err := a.DB.QueryRowContext(ctx, `
-		SELECT (SELECT COUNT(*) FROM notes),
-		       (SELECT COUNT(*) FROM notes WHERE visibility = 'public'),
+		SELECT (SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL),
+		       (SELECT COUNT(*) FROM notes WHERE visibility = 'public' AND deleted_at IS NULL),
 		       (SELECT COUNT(*) FROM notebooks),
 		       (SELECT COUNT(*) FROM tags),
-		       (SELECT COUNT(*) FROM files)`).Scan(&s.Notes, &s.Public, &s.Notebooks, &s.Tags, &s.Files)
+		       (SELECT COUNT(*) FROM files),
+		       (SELECT COUNT(*) FROM notes WHERE deleted_at IS NOT NULL)`).
+		Scan(&s.Notes, &s.Public, &s.Notebooks, &s.Tags, &s.Files, &s.Trash)
 	return s, err
 }
 

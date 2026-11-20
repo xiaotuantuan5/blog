@@ -1,9 +1,12 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, Navigate, Outlet, useLocation, useNavigate, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  CalendarDays,
+  Clock,
   Globe,
   Hash,
+  Highlighter,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -13,15 +16,18 @@ import {
   Search,
   Settings,
   Star,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, AUTH_EXPIRED_EVENT } from "@/lib/api";
 import { keys, useMe, useSite, useTags } from "@/lib/queries";
+import { getRecent } from "@/lib/recent";
 import { cn } from "@/lib/utils";
 import { useUI } from "@/stores/ui";
 import { NotebookTree } from "@/features/notebooks/NotebookTree";
 import { useCreateNote } from "@/features/notes/useCreateNote";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { CommandPalette } from "@/components/CommandPalette";
 import { Button, PageSpinner } from "@/components/ui";
 
 export function RequireAuth() {
@@ -74,6 +80,8 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const setSidebarOpen = useUI((s) => s.setSidebarOpen);
   const createNote = useCreateNote();
   const currentTag = sp.get("tag");
+  const loc = useLocation();
+  const recent = useRecent();
 
   const logout = async () => {
     try {
@@ -124,8 +132,35 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <NavItem to="/app/notes" icon={NotebookText} label="全部笔记" onClick={onNavigate} />
           <NavItem to="/app/notes?favorite=1" icon={Star} label="收藏" onClick={onNavigate} />
           <NavItem to="/app/notes?visibility=public" icon={Globe} label="已公开" onClick={onNavigate} />
+          <NavItem to="/app/daily" icon={CalendarDays} label="今天的日记" onClick={onNavigate} />
+          <NavItem to="/app/annotations" icon={Highlighter} label="批注汇总" onClick={onNavigate} />
           <NavItem to="/app/search" icon={Search} label="搜索" onClick={onNavigate} />
+          <NavItem to="/app/trash" icon={Trash2} label="回收站" onClick={onNavigate} />
         </div>
+
+        {recent.length > 0 && (
+          <div>
+            <p className="mb-1 px-2 text-xs font-semibold text-fg-subtle">最近打开</p>
+            <div className="space-y-0.5">
+              {recent.map((n) => (
+                <Link
+                  key={n.id}
+                  to={`/app/notes/${n.id}`}
+                  onClick={onNavigate}
+                  className={cn(
+                    "flex items-center gap-2 rounded-md px-2 py-1 text-sm",
+                    loc.pathname === `/app/notes/${n.id}`
+                      ? "bg-muted text-fg"
+                      : "text-fg-muted hover:bg-muted/60",
+                  )}
+                >
+                  <Clock className="h-3.5 w-3.5 shrink-0 text-fg-subtle" />
+                  <span className="truncate">{n.title}</span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
 
         <NotebookTree onNavigate={onNavigate} />
 
@@ -172,11 +207,25 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 export function WorkspaceLayout() {
   const { sidebarOpen, mobileNavOpen, setMobileNavOpen } = useUI();
   const loc = useLocation();
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => setMobileNavOpen(false), [loc.pathname, loc.search, setMobileNavOpen]);
 
+  // Ctrl/Cmd+K opens the command palette anywhere in the workspace.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <div className="flex h-dvh overflow-hidden">
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       {sidebarOpen && (
         <aside className="hidden w-60 shrink-0 border-r border-border bg-bg-soft md:block">
           <Sidebar />
@@ -212,4 +261,15 @@ export function SidebarToggle({ className }: { className?: string }) {
       <Menu className="h-4 w-4" />
     </Button>
   );
+}
+
+/** Locally tracked recently opened notes (re-reads on the custom event). */
+function useRecent() {
+  const [recent, setRecent] = useState(() => getRecent());
+  useEffect(() => {
+    const refresh = () => setRecent(getRecent());
+    window.addEventListener("recent-notes", refresh);
+    return () => window.removeEventListener("recent-notes", refresh);
+  }, []);
+  return recent;
 }

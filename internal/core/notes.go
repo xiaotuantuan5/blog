@@ -38,6 +38,8 @@ type NoteSummary struct {
 	PublishedAt db.Time  `json:"publishedAt"`
 	CreatedAt   db.Time  `json:"createdAt"`
 	UpdatedAt   db.Time  `json:"updatedAt"`
+	// DeletedAt is set while the note sits in the trash.
+	DeletedAt db.Time `json:"deletedAt"`
 	// Snippet is an HTML-escaped excerpt with <mark> around search hits.
 	Snippet string `json:"snippet,omitempty"`
 }
@@ -49,6 +51,8 @@ type Note struct {
 	ContentMD     string             `json:"contentMd"`
 	ContentHTML   string             `json:"contentHtml"`
 	TOC           []markdown.Heading `json:"toc"`
+	// Backlinks lists the notes that reference this one through [[title]].
+	Backlinks []Backlink `json:"backlinks"`
 }
 
 // NoteInput is what the editor sends when creating or updating a note.
@@ -64,6 +68,9 @@ type NoteInput struct {
 	Tags       []string `json:"tags"`
 	// Version must match the stored version on update.
 	Version int `json:"version"`
+	// Manual marks an explicit save (Ctrl+S / the save button): it always
+	// snapshots a revision, unlike autosave's 10-minute interval.
+	Manual bool `json:"manual"`
 }
 
 // NoteFlags changes list-level properties without touching the note
@@ -182,18 +189,28 @@ func (a *App) CreateNote(ctx context.Context, in NoteInput) (*Note, error) {
 		if in.Visibility == VisibilityPublic {
 			published = now
 		}
+		html, links, err := resolveWikilinks(ctx, tx, rendered.HTML)
+		if err != nil {
+			return err
+		}
 		toc, _ := json.Marshal(nonNilTOC(rendered.TOC))
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO notes (notebook_id, title, slug, content_md, content_html, content_text, toc_json,
 			                   summary, visibility, published_at, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			in.NotebookID, in.Title, in.Slug, in.ContentMD, rendered.HTML, rendered.Text, string(toc),
+			in.NotebookID, in.Title, in.Slug, in.ContentMD, html, rendered.Text, string(toc),
 			in.Summary, in.Visibility, published, now, now)
 		if err != nil {
 			return err
 		}
 		id, _ = res.LastInsertId()
-		return syncNoteRefs(ctx, tx, id, in.Tags, rendered.Files)
+		if err := syncNoteRefs(ctx, tx, id, in.Tags, rendered.Files); err != nil {
+			return err
+		}
+		if err := syncNoteLinks(ctx, tx, id, links); err != nil {
+			return err
+		}
+		return recordActivity(ctx, tx, id, "create")
 	})
 	if err != nil {
 		return nil, err
@@ -227,6 +244,9 @@ func (a *App) UpdateNote(ctx context.Context, id int64, in NoteInput) (*Note, er
 		if in.Version != curVer {
 			return conflict("这篇笔记已在其他地方被修改，请刷新后再编辑")
 		}
+		if err := snapshotRevision(ctx, tx, id, in.Manual); err != nil {
+			return err
+		}
 		if in.Slug == "" {
 			in.Slug = curSlug
 		} else if in.Slug != curSlug {
@@ -238,18 +258,28 @@ func (a *App) UpdateNote(ctx context.Context, id int64, in NoteInput) (*Note, er
 		if in.Visibility == VisibilityPublic && published.IsZero() {
 			published = now
 		}
+		html, links, err := resolveWikilinks(ctx, tx, rendered.HTML)
+		if err != nil {
+			return err
+		}
 		toc, _ := json.Marshal(nonNilTOC(rendered.TOC))
 		_, err = tx.ExecContext(ctx, `
 			UPDATE notes SET title = ?, slug = ?, content_md = ?, content_html = ?,
 			       content_text = ?, toc_json = ?, summary = ?, visibility = ?, published_at = ?,
 			       updated_at = ?, version = version + 1
 			WHERE id = ?`,
-			in.Title, in.Slug, in.ContentMD, rendered.HTML, rendered.Text, string(toc),
+			in.Title, in.Slug, in.ContentMD, html, rendered.Text, string(toc),
 			in.Summary, in.Visibility, published, now, id)
 		if err != nil {
 			return err
 		}
-		return syncNoteRefs(ctx, tx, id, in.Tags, rendered.Files)
+		if err := syncNoteRefs(ctx, tx, id, in.Tags, rendered.Files); err != nil {
+			return err
+		}
+		if err := syncNoteLinks(ctx, tx, id, links); err != nil {
+			return err
+		}
+		return recordActivity(ctx, tx, id, "edit")
 	})
 	if err != nil {
 		return nil, err
@@ -279,10 +309,43 @@ func (a *App) SetNoteFlags(ctx context.Context, id int64, f NoteFlags) error {
 	})
 }
 
-// DeleteNote permanently deletes a note.
+// DeleteNote moves a note to the trash. Trashed notes are purged
+// automatically after trashRetention.
 func (a *App) DeleteNote(ctx context.Context, id int64) error {
 	return a.inTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `DELETE FROM notes WHERE id = ?`, id)
+		res, err := tx.ExecContext(ctx,
+			`UPDATE notes SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL`, db.Now(), id)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+}
+
+// RestoreNote takes a note out of the trash.
+func (a *App) RestoreNote(ctx context.Context, id int64) error {
+	res, err := a.DB.ExecContext(ctx, `UPDATE notes SET deleted_at = NULL WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// PurgeNote permanently deletes a trashed note (or an untrashed one when
+// force is set), cascading to tags, links, revisions and annotations.
+func (a *App) PurgeNote(ctx context.Context, id int64, force bool) error {
+	return a.inTx(ctx, func(tx *sql.Tx) error {
+		query := `DELETE FROM notes WHERE id = ?`
+		if !force {
+			query += ` AND deleted_at IS NOT NULL`
+		}
+		res, err := tx.ExecContext(ctx, query, id)
 		if err != nil {
 			return err
 		}
@@ -292,6 +355,36 @@ func (a *App) DeleteNote(ctx context.Context, id int64) error {
 		_, err = tx.ExecContext(ctx, `DELETE FROM tags WHERE id NOT IN (SELECT tag_id FROM note_tags)`)
 		return err
 	})
+}
+
+// TrashItem is a note waiting in the trash.
+type TrashItem struct {
+	NoteSummary
+	NotebookName string `json:"notebookName"`
+}
+
+// ListTrash returns trashed notes, most recently deleted first.
+func (a *App) ListTrash(ctx context.Context) ([]TrashItem, error) {
+	rows, err := a.DB.QueryContext(ctx, `
+		SELECT `+noteCols+`, COALESCE(nb.name, '')
+		FROM notes n LEFT JOIN notebooks nb ON nb.id = n.notebook_id
+		WHERE n.deleted_at IS NOT NULL
+		ORDER BY n.deleted_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list := []TrashItem{}
+	for rows.Next() {
+		var it TrashItem
+		s, _, err := scanSummary(rows, &it.NotebookName)
+		if err != nil {
+			return nil, err
+		}
+		it.NoteSummary = s
+		list = append(list, it)
+	}
+	return list, rows.Err()
 }
 
 func nonNilTOC(t []markdown.Heading) []markdown.Heading {
@@ -368,7 +461,7 @@ func syncNoteRefs(ctx context.Context, tx *sql.Tx, id int64, tags, files []strin
 }
 
 const noteCols = `n.id, n.notebook_id, n.title, n.slug, n.summary, substr(n.content_text, 1, 200),
-	n.visibility, n.pinned, n.favorite, n.version, n.published_at, n.created_at, n.updated_at,
+	n.visibility, n.pinned, n.favorite, n.version, n.published_at, n.created_at, n.updated_at, n.deleted_at,
 	COALESCE((SELECT group_concat(t.name, char(31)) FROM note_tags nt JOIN tags t ON t.id = nt.tag_id WHERE nt.note_id = n.id), '')`
 
 type scanner interface{ Scan(dest ...any) error }
@@ -380,7 +473,8 @@ func scanSummary(row scanner, extra ...any) (NoteSummary, string, error) {
 		tags    string
 	)
 	dest := []any{&s.ID, &s.NotebookID, &s.Title, &s.Slug, &s.Summary, &textPre,
-		&s.Visibility, &s.Pinned, &s.Favorite, &s.Version, &s.PublishedAt, &s.CreatedAt, &s.UpdatedAt, &tags}
+		&s.Visibility, &s.Pinned, &s.Favorite, &s.Version, &s.PublishedAt, &s.CreatedAt, &s.UpdatedAt,
+		&s.DeletedAt, &tags}
 	err := row.Scan(append(dest, extra...)...)
 	manual := s.Summary
 	if s.Summary == "" {
@@ -414,9 +508,17 @@ func (a *App) getNoteWhere(ctx context.Context, where string, arg any) (*Note, e
 	return &n, nil
 }
 
-// GetNote returns any note by ID (admin).
+// GetNote returns any note by ID (admin), including trashed ones, with its
+// backlinks.
 func (a *App) GetNote(ctx context.Context, id int64) (*Note, error) {
-	return a.getNoteWhere(ctx, `n.id = ?`, id)
+	n, err := a.getNoteWhere(ctx, `n.id = ?`, id)
+	if err != nil {
+		return nil, err
+	}
+	if n.Backlinks, err = a.Backlinks(ctx, id); err != nil {
+		return nil, err
+	}
+	return n, nil
 }
 
 // PublicNote is a public note plus its neighbours in publish order.
@@ -434,21 +536,27 @@ type NoteLink struct {
 	Slug  string `json:"slug"`
 }
 
-// GetPublicNote returns a public note by slug. Markdown source is omitted.
+// GetPublicNote returns a public note by slug. Markdown source is omitted
+// and wikilinks to non-public notes collapse to plain text.
 func (a *App) GetPublicNote(ctx context.Context, slug string) (*PublicNote, error) {
-	n, err := a.getNoteWhere(ctx, `n.slug = ? AND n.visibility = 'public'`, slug)
+	n, err := a.getNoteWhere(ctx, `n.slug = ? AND n.visibility = 'public' AND n.deleted_at IS NULL`, slug)
 	if err != nil {
 		return nil, err
 	}
 	n.ContentMD = ""
 	n.ManualSummary = ""
+	n.Backlinks = nil
+	if n.ContentHTML, err = a.rewirePublicWikilinks(ctx, n.ContentHTML); err != nil {
+		return nil, err
+	}
 	// The shadowing fields above stay empty, so they're omitted from JSON.
 	pn := &PublicNote{Note: n}
 	neighbour := func(cmp, order string) (*NoteLink, error) {
 		var l NoteLink
 		err := a.DB.QueryRowContext(ctx, `
 			SELECT title, slug FROM notes
-			WHERE visibility = 'public' AND (published_at `+cmp+` ? OR (published_at = ? AND id `+cmp+` ?))
+			WHERE visibility = 'public' AND deleted_at IS NULL
+			  AND (published_at `+cmp+` ? OR (published_at = ? AND id `+cmp+` ?))
 			ORDER BY published_at `+order+`, id `+order+` LIMIT 1`,
 			n.PublishedAt, n.PublishedAt, n.ID).Scan(&l.Title, &l.Slug)
 		if errors.Is(err, sql.ErrNoRows) {

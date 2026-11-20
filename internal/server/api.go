@@ -270,6 +270,99 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handleRestoreNote(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if err := s.app.RestoreNote(r.Context(), id); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePurgeNote(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	// Only trashed notes can be purged; force is not exposed over HTTP.
+	if err := s.app.PurgeNote(r.Context(), id, false); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleTrash(w http.ResponseWriter, r *http.Request) {
+	items, err := s.app.ListTrash(r.Context())
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleListRevisions(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	list, err := s.app.ListRevisions(r.Context(), id)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (s *Server) handleRestoreRevision(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	rid, err := strconv.ParseInt(r.PathValue("rid"), 10, 64)
+	if err != nil || rid <= 0 {
+		writeMsg(w, http.StatusBadRequest, "无效的版本号")
+		return
+	}
+	n, err := s.app.RestoreRevision(r.Context(), id, rid)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, n)
+}
+
+func (s *Server) handleDailyNote(w http.ResponseWriter, r *http.Request) {
+	n, err := s.app.GetOrCreateDaily(r.Context(), r.PathValue("date"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, n)
+}
+
+func (s *Server) handleHeatmap(w http.ResponseWriter, r *http.Request) {
+	from := r.URL.Query().Get("from")
+	to := r.URL.Query().Get("to")
+	if from == "" || to == "" {
+		writeMsg(w, http.StatusBadRequest, "缺少 from / to 参数")
+		return
+	}
+	days, err := s.app.Heatmap(r.Context(), from, to)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, days)
+}
+
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ContentMD string `json:"contentMd"`
@@ -278,7 +371,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	res, err := markdown.Render(in.ContentMD)
+	res, err := s.app.RenderPreview(r.Context(), in.ContentMD)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -288,6 +381,97 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		toc = []markdown.Heading{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"html": res.HTML, "toc": toc})
+}
+
+// ---- Annotations ----
+
+func (s *Server) handleListNoteAnnotations(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	list, err := s.app.ListNoteAnnotations(r.Context(), id)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (s *Server) handleCreateAnnotation(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	var in core.AnnotationInput
+	if err := decodeJSON(w, r, &in); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	an, err := s.app.CreateAnnotation(r.Context(), id, in)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, an)
+}
+
+func (s *Server) handleUpdateAnnotation(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	var in core.AnnotationInput
+	if err := decodeJSON(w, r, &in); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	an, err := s.app.UpdateAnnotation(r.Context(), id, in)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, an)
+}
+
+func (s *Server) handleDeleteAnnotation(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if err := s.app.DeleteAnnotation(r.Context(), id); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleListAnnotations(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f := core.AnnotationFilter{
+		Color:    q.Get("color"),
+		Q:        q.Get("q"),
+		Page:     queryInt(r, "page", 1),
+		PageSize: queryInt(r, "pageSize", 50),
+	}
+	if v := q.Get("notebook"); v != "" {
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			writeMsg(w, http.StatusBadRequest, "无效的笔记本")
+			return
+		}
+		f.NotebookID = &id
+	}
+	page, err := s.app.ListAnnotations(r.Context(), f)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
 }
 
 // ---- Notebooks & tags ----

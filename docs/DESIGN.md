@@ -39,7 +39,7 @@
 
 ## 3. 技术选型
 
-### 后端（Go 1.22+）
+### 后端（Go 1.25+）
 
 | 用途 | 选择 | 说明 |
 |---|---|---|
@@ -63,7 +63,7 @@
 | 请求和缓存 | TanStack Query |
 | 本地状态 | Zustand（侧栏、主题、编辑器设置） |
 | 样式 | Tailwind CSS（构建时生成，无运行时依赖） |
-| 组件 | shadcn/ui（源码拷进项目，基于 Radix） |
+| 组件 | 自写的轻量组件 + Radix（对话框、下拉菜单） |
 | 编辑器 | CodeMirror 6（Markdown 模式、Vim 键位可选） |
 | 命令面板 | cmdk |
 | 数学公式 | KaTeX（字体随产物打包） |
@@ -78,7 +78,7 @@
 
 **笔记**
 - 新建、编辑、删除笔记，Markdown 格式
-- 笔记本：树形目录，可拖拽排序和移动
+- 笔记本：树形目录，按名称排序；可把笔记或笔记本拖到另一个笔记本上来移动
 - 标签：多标签，标签页聚合
 - 状态：私有 / 公开；可置顶、可收藏
 - 自动保存：停止输入 1 秒后保存，离开页面前未保存会提示
@@ -245,7 +245,7 @@ sessions (token_hash PRIMARY KEY, admin_id, expires_at, created_at)
 
 -- 全文索引，用触发器与 notes 同步
 CREATE VIRTUAL TABLE notes_fts USING fts5(
-  title, content_md, content='notes', content_rowid='id', tokenize='trigram'
+  title, content_text, content='notes', content_rowid='id', tokenize='trigram'
 );
 CREATE VIRTUAL TABLE annotations_fts USING fts5(
   exact, comment_md, content='annotations', content_rowid='id', tokenize='trigram'
@@ -351,48 +351,48 @@ GET /*                    SPA；/n/:slug 会注入 SEO 元信息
 blog/
 ├── cmd/blog/main.go           入口，子命令 serve / init-admin / reset-password
 ├── internal/
-│   ├── config/                命令行参数和环境变量
-│   ├── db/
-│   │   ├── db.go              连接、PRAGMA、迁移
-│   │   └── migrations/*.sql
-│   ├── store/                 数据访问（每张表一个文件）
-│   ├── service/               业务逻辑
-│   │   ├── note.go            保存时：渲染、解析双链和闪卡、写版本、记活动
-│   │   ├── search.go
-│   │   ├── srs.go             SM-2 算法
-│   │   ├── exportimport.go
-│   │   └── backup.go
-│   ├── markdown/              goldmark 配置和自定义扩展（双链、提示块、闪卡）
-│   ├── handler/               HTTP handler
-│   ├── middleware/            鉴权、CSRF、限流、日志、recover、安全响应头
-│   └── server/                路由注册、SPA 回退、SEO 注入
+│   ├── db/                    连接、PRAGMA、迁移（migrations/*.sql）、时间类型
+│   ├── core/                  业务逻辑和 SQL（笔记、笔记本、标签、搜索、附件、登录、设置）
+│   ├── markdown/              goldmark 配置和自定义扩展（公式、提示块、代码高亮、HTML 过滤）
+│   └── server/                路由、中间件（鉴权、CSRF、限流、日志、安全头）、RSS、SPA 和 SEO 注入
 ├── web/
 │   ├── src/
-│   │   ├── api/               请求封装和类型
-│   │   ├── components/
-│   │   ├── features/          notes / editor / review / topics ...
+│   │   ├── lib/               API 封装、类型、查询
+│   │   ├── components/        通用组件、笔记渲染、目录
+│   │   ├── features/          editor / notes / notebooks
 │   │   ├── layouts/           PublicLayout、WorkspaceLayout
-│   │   ├── routes/
-│   │   └── stores/
-│   ├── index.html
-│   ├── vite.config.ts
+│   │   ├── routes/            public / app 页面
+│   │   └── stores/            界面状态（主题、侧栏、编辑模式）
 │   └── embed.go               //go:embed all:dist
+├── tools/chromacss/           生成代码高亮样式
 ├── docs/DESIGN.md
 ├── Makefile
 └── README.md
 ```
+
+> 实现时把原计划的 `store` + `service` 两层合并成了 `core` 一个包。单用户应用的 SQL 和业务逻辑耦合紧密，拆两层只会多一层转发。
+
+### 第一期实现说明
+
+- `notes` 表比第 5 节多了 `content_text`（纯文本，供搜索和摘要）、`toc_json`、`version` 三列；全文索引建在 `title, content_text` 上，搜索结果里不会混入 Markdown 符号
+- 编辑器的自动保存只提交正文和元信息；置顶、收藏、移动笔记本走 `PATCH /api/admin/notes/:id`，不改版本号，所以在列表里操作不会和正在编辑的窗口冲突
+- 保存时带上版本号，版本不一致返回 409，页面提示“用我的内容覆盖”或“加载最新版本”
+- 每次修改都会先写进浏览器本地草稿，保存成功后清除；再次打开时如果发现未保存的草稿会提示恢复
+- 删除笔记在第一期是直接删除（有确认框），第二期加入回收站
+- 额外加了：修改密码、标签重命名/合并/删除、工作台统计
+- 前端不加载外部资源，CSP 也禁止外部图片，所以 Markdown 里引用外部图片链接不会显示，需要上传到本地
 
 ## 9. 安全
 
 - 所有 SQL 使用参数化查询
 - Markdown 渲染结果经过 bluemonday 过滤
 - 安全响应头：`Content-Security-Policy: default-src 'self'`（前端无外部资源，可以设得很严）、`X-Content-Type-Options: nosniff`、`Referrer-Policy`
-- 上传：检查文件实际类型（不信任扩展名），限制大小，SVG 以附件形式下载，不内联显示
+- 上传：按文件内容判断类型（不信任扩展名），只允许 PNG/JPEG/GIF/WebP/PDF/ZIP 和 .txt/.md 等纯文本，限制大小；不支持 SVG（可能带脚本）
 - 登录失败按 IP 限流，连续失败后延迟响应
 - 私有笔记和附件在每个接口都校验登录状态，公开接口在 SQL 层过滤 `visibility = 'public'`
 
 ## 10. 开发方式
 
-- 开发时：`go run ./cmd/blog serve -dev` 启动后端（8080），`cd web && npm run dev` 启动 Vite（5173），Vite 把 `/api` 代理到 8080
+- 开发时：`make dev-api` 启动后端（8080），`make dev-web` 启动 Vite（5173），Vite 把 `/api`、`/files` 代理到 8080
 - 构建时：`make build` 生成单个二进制
-- 测试：Go 部分写 `store`、`service`、`markdown` 的单元测试；前端以类型检查和构建通过为准
+- 测试：Go 部分写 `core`、`markdown` 的单元测试；前端以类型检查和构建通过为准

@@ -172,7 +172,7 @@
 - **导入导出**：
   - 导出全部笔记为 zip（Markdown 文件 + 附件，按笔记本分目录，frontmatter 里保留标签和状态）
   - 导入 Markdown 文件夹（兼容 Obsidian 的 `[[双链]]` 和图片引用）
-- **自动备份**：每天用 `VACUUM INTO` 备份数据库到 `data/backups/`，保留最近 N 份；后台可以手动下载备份
+- **自动备份**：每天用 `VACUUM INTO` 备份数据库到 `data/backups/`，保留最近 N 份；后台可以手动下载备份（备份/恢复 API 已提前实现，见「数据持久化实现说明」）
 
 ## 5. 数据模型
 
@@ -306,6 +306,8 @@ PUT    /api/admin/topics/:id/notes/:noteId    更新学习状态
 GET    /api/admin/export                      下载 zip
 POST   /api/admin/import                      上传 zip
 GET    /api/admin/backups   GET /api/admin/backups/:name
+GET    /api/admin/backup                      下载备份 tar.gz（数据库快照 + 附件）
+POST   /api/admin/restore                     上传备份恢复，随后进程自动重启
 GET/PUT /api/admin/settings
 ```
 
@@ -393,6 +395,15 @@ blog/
 - **最近访问**：localStorage 记录最近 8 篇（`lib/recent.ts`），侧栏展示；不做服务端接口
 - **划线批注**：位置锚点按 4.1 节实现（exact/prefix/suffix/offsets）。前端定位顺序：全文精确匹配（多处时按前后文和记录位置打分）→ 空白不敏感的模糊匹配 → 标记失效。代码块和公式整体高亮（`.math`/`pre` 祖先扩展为整块）。跨节点选区用逐文本节点包 `<mark>` 的方式高亮（按文档序倒序应用，避免节点分裂破坏偏移）。失效批注在右侧面板单列，可"重新定位"（选中新文字替换锚点）或删除。批注只在工作区（登录后）加载，公开页面不请求批注接口。模糊匹配没有引入 diff-match-patch，空白归一化匹配已覆盖绝大多数编辑场景
 - 迁移 002 新增 `note_links`、`note_revisions`、`activity`、`annotations`（+ `annotations_fts` 触发器）与 `notes.deleted_at`、`notes.is_daily`
+
+### 数据持久化实现说明
+
+- 背景：站点部署在 ZCode Sites，`/data` 是实例级临时存储，重启或重新部署都会清空，平台也不注入密钥（`.env` 不进包）。方案是「站点提供备份/恢复 API + 外部同步代理」，密钥全程留在 GitHub Secrets
+- **备份**：`GET /api/admin/backup` 用 `VACUUM INTO` 生成一致性快照，与 `files/` 附件、`manifest.json`（实例 id、生成时间、schema 版本、笔记/附件数）一起打包为 tar.gz 流式返回；实例 id 等信息同时放在 `X-Backup-*` 响应头里
+- **实例标识**：`settings.instance_id` 首次访问时生成（无迁移，惰性写入）。新实例（重新部署或存储被清空）是新的 id——这是同步代理判断"需要恢复"的信号；恢复不改变 id
+- **恢复**：`POST /api/admin/restore` 上传同一格式的 tar.gz。校验通过（条目白名单 `blog.db`/`manifest.json`/`files/**`、防路径穿越、防压缩炸弹、`quick_check`、备份 schema 版本不得高于当前二进制）后把数据库与附件目录换入，被替换的旧状态保留在 `data/.restore-prev/`；返回 202 后进程用 `syscall.Exec` 自我重启加载新数据。附件目录整体换名（不做目录覆盖 rename，overlayfs 不支持）
+- **外部同步**：GitHub 私有仓库 `blog-backup` 的 Actions 每小时登录站点拉取备份提交进 git（天然全量历史）；发现 instance_id 变化即判定实例被重置，先把重置后的现状存档到 `resets/`，再把仓库里最近的 `backups/latest.tar.gz` 推回恢复接口并复核。凭据（BLOG_BASE_URL / BLOG_ADMIN_USER / BLOG_ADMIN_PASSWORD）存 GitHub Secrets
+- 已知取舍：最后一次同步到重置之间的写入会丢（窗口 ≤ 1 小时）；管理员修改密码后需同步更新 GitHub Secret；有意清空全部数据时，先删除仓库中的 `state.json` 或停用该 workflow，否则会被自动恢复
 
 ## 9. 安全
 

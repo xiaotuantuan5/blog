@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/url"
@@ -45,6 +46,54 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+// LatestVersion is the highest embedded migration version.
+func LatestVersion() int {
+	entries, err := fs.ReadDir(migrations, "migrations")
+	if err != nil {
+		return 0
+	}
+	latest := 0
+	for _, e := range entries {
+		if v, err := strconv.Atoi(strings.SplitN(e.Name(), "_", 2)[0]); err == nil && v > latest {
+			latest = v
+		}
+	}
+	return latest
+}
+
+// CheckBackup opens the database at path read-only, verifies it is a healthy
+// SQLite file with our schema, and reports its migration version and
+// instance id (empty when the database has none yet).
+func CheckBackup(ctx context.Context, path string) (schemaVersion int, instanceID string, err error) {
+	q := url.Values{}
+	q.Set("mode", "ro")
+	for _, p := range []string{"busy_timeout(5000)"} {
+		q.Add("_pragma", p)
+	}
+	d, err := sql.Open("sqlite", "file:"+path+"?"+q.Encode())
+	if err != nil {
+		return 0, "", err
+	}
+	defer d.Close()
+	if err := d.PingContext(ctx); err != nil {
+		return 0, "", err
+	}
+	var check string
+	if err := d.QueryRowContext(ctx, `PRAGMA quick_check`).Scan(&check); err != nil {
+		return 0, "", err
+	}
+	if check != "ok" {
+		return 0, "", fmt.Errorf("quick_check: %s", check)
+	}
+	if err := d.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&schemaVersion); err != nil {
+		return 0, "", err
+	}
+	if err := d.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = 'instance_id'`).Scan(&instanceID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, "", err
+	}
+	return schemaVersion, instanceID, nil
 }
 
 func migrate(ctx context.Context, db *sql.DB) error {

@@ -75,6 +75,8 @@ func New(app *core.App, cfg Config, dist fs.FS) http.Handler {
 	mux.HandleFunc("POST /api/admin/files", admin(s.handleUpload))
 	mux.HandleFunc("GET /api/admin/settings", admin(s.handleGetSettings))
 	mux.HandleFunc("PUT /api/admin/settings", admin(s.handleUpdateSettings))
+	mux.HandleFunc("GET /api/admin/backup", admin(s.handleBackupDownload))
+	mux.HandleFunc("POST /api/admin/restore", admin(s.handleRestoreUpload))
 	mux.HandleFunc("GET /api/admin/stats", admin(s.handleStats))
 
 	// Attachments, feeds, SPA

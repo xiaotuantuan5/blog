@@ -11,3 +11,5 @@
 *.db-shm
 *.db-wal
 .DS_Store
+.zcode-site/
+.zcode-site.json

@@ -120,6 +120,42 @@
 - **每日笔记**：一键打开今天的日记（`日记/2026-11-20`），适合记学习日志
 - **学习热力图**：类似 GitHub 贡献图，按天统计新建和编辑的笔记数
 - **最近访问**：侧栏显示最近打开的笔记
+- **划线批注**：在阅读视图里直接对文章做标注，不改动原文，详见第 4.1 节
+
+### 4.1 划线批注
+
+**使用方式**
+- 在阅读视图中选中一段文字，弹出浮动工具栏：
+  - 4 种颜色高亮（黄 / 绿 / 蓝 / 红，可以自己约定含义，例如"重点 / 疑问 / 待查 / 错误"）
+  - 添加批注（Markdown，支持代码和公式）
+  - 复制带出处的引用
+  - 生成闪卡（选中文字作为答案，自己填问题，第三期上线后可用）
+- 高亮部分鼠标悬停时显示批注，点击可编辑或删除
+- 右侧面板按原文顺序列出本篇所有批注，点击跳到对应位置；可按颜色筛选
+- 一键显示 / 隐藏所有高亮，方便干净地重读
+- 批注**只有自己可见**：访客看公开文章时不会加载批注接口，也看不到高亮
+
+**批注汇总页 `/app/annotations`**
+- 列出所有笔记的批注，可按颜色、标签、笔记本筛选，可搜索批注内容
+- 适合复习时只看"疑问"类批注，或回顾某个主题下的重点
+
+**原文修改后批注如何保持位置**
+
+批注不保存 DOM 路径（原文一改就失效），而是参考 W3C Web Annotation 的做法，保存文字本身：
+
+- `exact`：选中的原文
+- `prefix` / `suffix`：前后各 32 个字符的上下文
+- `start` / `end`：在全文纯文本中的字符位置（只作参考）
+
+前端渲染文章后，按以下顺序重新定位：
+
+1. 在纯文本中查找 `exact`，有多处时选前后文匹配、位置最接近的一处
+2. 找不到时做模糊匹配（`diff-match-patch` 的 match 算法，随前端打包），允许少量改动
+3. 仍然找不到就标记为"失效"，在右侧面板单独列出并显示当时的原文，可以手动删除或重新选择位置
+
+定位到之后，用 `TreeWalker` 遍历文本节点，把选区包进 `<mark>`，跨段落、跨加粗等格式的选区也能正确高亮。代码块和公式内部可以高亮，但按整块处理。
+
+**导出**：导出 zip 时，批注写入每篇笔记的同名 `.annotations.md` 文件（引用原文 + 批注内容），不改动笔记正文。
 
 ### 第三期：学习工具
 
@@ -170,6 +206,23 @@ note_revisions (id, note_id, title, content_md, created_at)            -- 历史
 files (id, hash UNIQUE, filename, mime, size, created_at)
 note_files (note_id, file_id)
 
+-- 划线批注
+annotations (
+  id            INTEGER PRIMARY KEY,
+  note_id       INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+  exact         TEXT NOT NULL,              -- 选中的原文
+  prefix        TEXT NOT NULL DEFAULT '',
+  suffix        TEXT NOT NULL DEFAULT '',
+  start_offset  INTEGER NOT NULL,           -- 纯文本中的位置，仅作定位参考
+  end_offset    INTEGER NOT NULL,
+  color         TEXT NOT NULL DEFAULT 'yellow',  -- yellow | green | blue | red
+  comment_md    TEXT NOT NULL DEFAULT '',
+  comment_html  TEXT NOT NULL DEFAULT '',
+  orphaned      INTEGER NOT NULL DEFAULT 0, -- 原文修改后无法定位
+  created_at    DATETIME NOT NULL,
+  updated_at    DATETIME NOT NULL
+)
+
 -- 闪卡
 cards (
   id, note_id, question, answer,
@@ -193,6 +246,9 @@ sessions (token_hash PRIMARY KEY, admin_id, expires_at, created_at)
 -- 全文索引，用触发器与 notes 同步
 CREATE VIRTUAL TABLE notes_fts USING fts5(
   title, content_md, content='notes', content_rowid='id', tokenize='trigram'
+);
+CREATE VIRTUAL TABLE annotations_fts USING fts5(
+  exact, comment_md, content='annotations', content_rowid='id', tokenize='trigram'
 );
 ```
 
@@ -236,6 +292,12 @@ GET    /api/admin/trash
 GET    /api/admin/stats/heatmap?year=
 GET    /api/admin/tasks                       待办汇总
 
+GET    /api/admin/notes/:id/annotations       本篇批注
+POST   /api/admin/notes/:id/annotations       新建批注
+PUT    /api/admin/annotations/:id             改颜色、改批注、重新定位
+DELETE /api/admin/annotations/:id
+GET    /api/admin/annotations?color=&tag=&notebook=&q=   批注汇总
+
 GET    /api/admin/cards/due                   今日待复习
 POST   /api/admin/cards/:id/review            {grade: 0-5}
 CRUD   /api/admin/topics
@@ -270,7 +332,8 @@ GET /*                    SPA；/n/:slug 会注入 SEO 元信息
 /login
 /app                  工作台：今日待复习、最近编辑、热力图、待办数
 /app/notes            笔记列表（左侧笔记本树 + 标签）
-/app/notes/:id        编辑器（预览、目录、反向链接、历史版本）
+/app/notes/:id        阅读视图（划线批注、目录、反向链接），可切换到编辑器（预览、历史版本）
+/app/annotations      批注汇总
 /app/daily            今天的日记
 /app/search           搜索
 /app/review           闪卡复习

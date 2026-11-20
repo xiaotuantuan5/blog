@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useBlocker, useLocation, useParams, useSearchParams } from "react-router";
+import { Link, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import {
@@ -11,7 +11,9 @@ import {
   ExternalLink,
   Folder,
   Globe,
+  History,
   Inbox,
+  Link2,
   Lock,
   MoreHorizontal,
   PenLine,
@@ -19,9 +21,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
+import { diffLines } from "@/lib/diff";
 import { keys, useInvalidateNotes, useNotebooks } from "@/lib/queries";
-import type { Note, NoteInput, Visibility } from "@/lib/types";
-import { cn, formatDateTime, useTitle } from "@/lib/utils";
+import { pushRecent } from "@/lib/recent";
+import type { AnnotationColor, Backlink, Note, NoteInput, Revision, Visibility } from "@/lib/types";
+import { cn, formatDateTime, relativeTime, useTitle } from "@/lib/utils";
 import { useUI, type EditorMode } from "@/stores/ui";
 import { SidebarToggle } from "@/layouts/WorkspaceLayout";
 import { NoteContent } from "@/components/NoteContent";
@@ -46,6 +50,14 @@ import { TagInput } from "@/features/editor/TagInput";
 import { NoteActions } from "@/features/notes/NoteActions";
 import { UNTITLED } from "@/features/notes/useCreateNote";
 import { buildTree, flattenTree, notebookPath } from "@/features/notebooks/tree";
+import { selectionToAnchor, type Anchor } from "@/features/annotations/locate";
+import {
+  AnnotationEditDialog,
+  AnnotationPopover,
+  AnnotationsPanel,
+  SelectionToolbar,
+  useNoteAnnotations,
+} from "@/features/annotations/annotations";
 
 interface Form {
   title: string;
@@ -137,6 +149,7 @@ function Editor({ note }: { note: Note }) {
   const qc = useQueryClient();
   const invalidate = useInvalidateNotes();
   const location = useLocation();
+  const navigate = useNavigate();
   const [sp] = useSearchParams();
   const { editorMode, setEditorMode, vim } = useUI();
   const editorRef = useRef<ReactCodeMirrorRef | null>(null);
@@ -149,6 +162,15 @@ function Editor({ note }: { note: Note }) {
     return d && !sameForm(d.form, fromNote(note)) ? d : null;
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [revisionsOpen, setRevisionsOpen] = useState(false);
+  const [annDialog, setAnnDialog] = useState<{
+    mode: "create" | "edit";
+    id?: number;
+    exact: string;
+    color: AnnotationColor;
+    commentMd: string;
+    anchor?: Anchor | null;
+  } | null>(null);
 
   const formRef = useRef(form);
   formRef.current = form;
@@ -163,7 +185,7 @@ function Editor({ note }: { note: Note }) {
 
   const isDirty = () => !sameForm(formRef.current, savedRef.current);
 
-  const save = useCallback(async (): Promise<boolean> => {
+  const save = useCallback(async (manual = false): Promise<boolean> => {
     clearTimeout(timer.current);
     while (inflight.current) await inflight.current;
     if (statusRef.current === "conflict") return false;
@@ -180,6 +202,7 @@ function Editor({ note }: { note: Note }) {
       slug: snapshot.slug,
       summary: snapshot.summary,
       version: versionRef.current,
+      manual,
     };
     setStatus("saving");
     const run = (async () => {
@@ -274,6 +297,17 @@ function Editor({ note }: { note: Note }) {
 
   const update = (patch: Partial<Form>) => setForm((f) => ({ ...f, ...patch }));
   const stableSave = useCallback(() => void save(), [save]);
+  /** Ctrl+S: an explicit save always snapshots a revision server-side. */
+  const manualSave = useCallback(() => void save(true), [save]);
+
+  // Track recently opened notes for the sidebar.
+  useEffect(() => {
+    pushRecent(note);
+  }, [note]);
+
+  // Reading view (仅预览): highlight annotations live on the rendered article.
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const ann = useNoteAnnotations(note.id, contentRef, preview.html, editorMode === "preview");
 
   const resolveConflict = async (keepMine: boolean) => {
     const latest = await api.note(note.id);
@@ -296,6 +330,20 @@ function Editor({ note }: { note: Note }) {
   const chars = useMemo(() => form.contentMd.replace(/\s/g, "").length, [form.contentMd]);
   const listQS = sp.toString() ? `?${sp.toString()}` : "";
   const focusTitle = (location.state as { focusTitle?: boolean } | null)?.focusTitle;
+
+  // Wikilinks: navigate in-app; missing targets stay inert with a hint.
+  const onContentClick = (e: React.MouseEvent) => {
+    const el = (e.target as HTMLElement).closest<HTMLElement>("a.wikilink, .wikilink-missing");
+    if (!el) return;
+    e.preventDefault();
+    if (el.classList.contains("wikilink-missing")) {
+      toast.info("双链目标不存在：创建同名笔记后即可跳转");
+      return;
+    }
+    const href = el.getAttribute("href") ?? "";
+    const m = href.match(/^\/app\/notes\/(\d+)$/);
+    if (m) navigate(`/app/notes/${m[1]}`);
+  };
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
@@ -330,6 +378,9 @@ function Editor({ note }: { note: Note }) {
               <ExternalLink className="h-4 w-4" />
             </a>
           )}
+          <Button variant="ghost" size="icon" onClick={() => setRevisionsOpen(true)} title="历史版本" aria-label="历史版本">
+            <History className="h-4 w-4" />
+          </Button>
           <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title="访问地址与摘要" aria-label="笔记设置">
             <Settings2 className="h-4 w-4" />
           </Button>
@@ -345,6 +396,29 @@ function Editor({ note }: { note: Note }) {
       </header>
 
       {/* Banners */}
+      {note.deletedAt && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm dark:border-amber-800 dark:bg-amber-950/40">
+          <AlertTriangle className="h-4 w-4 text-amber-600" />
+          <span>这篇笔记在回收站中，30 天后自动清除。</span>
+          <Button
+            size="sm"
+            variant="primary"
+            className="ml-auto"
+            onClick={async () => {
+              try {
+                await api.restoreNote(note.id);
+                invalidate();
+                await qc.invalidateQueries({ queryKey: keys.note(note.id) });
+                toast.success("已从回收站恢复");
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "恢复失败");
+              }
+            }}
+          >
+            恢复
+          </Button>
+        </div>
+      )}
       {draft && (
         <div className="flex flex-wrap items-center gap-2 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm dark:border-amber-800 dark:bg-amber-950/40">
           <AlertTriangle className="h-4 w-4 text-amber-600" />
@@ -426,7 +500,7 @@ function Editor({ note }: { note: Note }) {
             <MarkdownEditor
               value={form.contentMd}
               onChange={(contentMd) => update({ contentMd })}
-              onSave={stableSave}
+              onSave={manualSave}
               vim={vim}
               editorRef={editorRef}
               autoFocus={!focusTitle}
@@ -440,18 +514,59 @@ function Editor({ note }: { note: Note }) {
               editorMode === "split" && "hidden lg:block",
             )}
           >
-            <div className={cn("mx-auto px-6 py-5", editorMode === "preview" ? "flex max-w-5xl gap-10" : "max-w-3xl")}>
-              <div className="min-w-0 flex-1">
+            <div className={cn("mx-auto px-6 py-5", editorMode === "preview" ? "flex max-w-6xl gap-8" : "max-w-3xl")}>
+              <div
+                ref={contentRef}
+                className={cn("relative min-w-0 flex-1", ann.hidden && "ann-hidden")}
+                onClick={onContentClick}
+              >
                 {form.contentMd.trim() ? (
                   <NoteContent html={preview.html} />
                 ) : (
                   <p className="text-sm text-fg-subtle">预览会显示在这里</p>
                 )}
+                {editorMode === "preview" && (
+                  <>
+                    <SelectionToolbar
+                      contentRef={contentRef}
+                      hidden={ann.hidden}
+                      onToggleHidden={() => ann.setHidden(!ann.hidden)}
+                      onColor={(color) => ann.create.mutate({ color })}
+                      onComment={() => {
+                        // Capture the anchor now: focusing the dialog's
+                        // textarea collapses the live selection.
+                        const anchor = contentRef.current ? selectionToAnchor(contentRef.current) : undefined;
+                        const sel = anchor?.exact ?? window.getSelection()?.toString() ?? "";
+                        if (sel.trim())
+                          setAnnDialog({ mode: "create", exact: sel.slice(0, 200), color: "yellow", commentMd: "", anchor });
+                      }}
+                      onQuote={async () => {
+                        const sel = window.getSelection()?.toString() ?? "";
+                        try {
+                          await navigator.clipboard.writeText(`> ${sel.trim()}\n\n—— ${form.title || UNTITLED}`);
+                          toast.success("已复制引用");
+                        } catch {
+                          toast.error("复制失败");
+                        }
+                      }}
+                      pendingRelocate={ann.pendingRelocate}
+                      onCancelRelocate={() => ann.setPendingRelocate(null)}
+                    />
+                    <AnnotationPopover
+                      active={ann.active}
+                      onClose={() => ann.setActive(null)}
+                      onEdit={(a) => setAnnDialog({ mode: "edit", id: a.id, exact: a.exact, color: a.color, commentMd: a.commentMd })}
+                      onDelete={(id) => ann.remove.mutate(id)}
+                    />
+                  </>
+                )}
               </div>
-              {editorMode === "preview" && preview.toc.length > 0 && (
-                <aside className="hidden w-52 shrink-0 xl:block">
-                  <div className="sticky top-4">
-                    <Toc toc={preview.toc} />
+              {editorMode === "preview" && (
+                <aside className="hidden w-64 shrink-0 xl:block">
+                  <div className="sticky top-4 thin-scroll max-h-[calc(100dvh-8rem)] space-y-6 overflow-y-auto pb-6">
+                    {preview.toc.length > 0 && <Toc toc={preview.toc} />}
+                    {note.backlinks && note.backlinks.length > 0 && <BacklinksPanel links={note.backlinks} />}
+                    <AnnotationsPanel ann={ann} />
                   </div>
                 </aside>
               )}
@@ -473,7 +588,160 @@ function Editor({ note }: { note: Note }) {
         form={form}
         onSave={(patch) => update(patch)}
       />
+      <RevisionsDialog
+        open={revisionsOpen}
+        onOpenChange={setRevisionsOpen}
+        noteId={note.id}
+        currentMd={savedRef.current.contentMd}
+        onRestored={(n) => {
+          versionRef.current = n.version;
+          savedRef.current = fromNote(n);
+          setForm(fromNote(n));
+          qc.setQueryData(keys.note(note.id), n);
+          setPreview({ html: n.contentHtml, toc: n.toc });
+          localStorage.removeItem(draftKey(note.id));
+          invalidate();
+          toast.success("已恢复到所选版本");
+        }}
+      />
+      <AnnotationEditDialog
+        initial={annDialog ? { color: annDialog.color, commentMd: annDialog.commentMd, exact: annDialog.exact } : null}
+        title={annDialog?.mode === "create" ? "添加批注" : "编辑批注"}
+        onOpenChange={(o) => !o && setAnnDialog(null)}
+        onSubmit={({ color, commentMd }) => {
+          if (annDialog?.mode === "edit" && annDialog.id != null) ann.update.mutate({ id: annDialog.id, color, commentMd });
+          else ann.create.mutate({ color, commentMd, anchor: annDialog?.anchor ?? undefined });
+        }}
+      />
     </div>
+  );
+}
+
+function BacklinksPanel({ links }: { links: Backlink[] }) {
+  return (
+    <section className="space-y-1.5">
+      <h3 className="text-xs font-semibold text-fg-subtle">反向链接 · {links.length}</h3>
+      <ul className="space-y-1">
+        {links.map((l) => (
+          <li key={l.id}>
+            <Link
+              to={`/app/notes/${l.id}`}
+              className="flex items-center gap-1.5 rounded px-1 py-0.5 text-xs text-fg-muted hover:bg-muted hover:text-fg"
+            >
+              <Link2 className="h-3 w-3 shrink-0 text-fg-subtle" />
+              <span className="truncate">{l.title}</span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function RevisionsDialog({
+  open,
+  onOpenChange,
+  noteId,
+  currentMd,
+  onRestored,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  noteId: number;
+  currentMd: string;
+  onRestored: (n: Note) => void;
+}) {
+  const [selected, setSelected] = useState<Revision | null>(null);
+  const [busy, setBusy] = useState(false);
+  const list = useQuery({
+    queryKey: ["revisions", noteId],
+    queryFn: () => api.revisions(noteId),
+    enabled: open,
+  });
+
+  useEffect(() => {
+    if (open) setSelected(null);
+  }, [open, noteId]);
+
+  const diff = useMemo(
+    () => (selected ? diffLines(selected.contentMd, currentMd) : []),
+    [selected, currentMd],
+  );
+
+  const restore = async () => {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      const n = await api.restoreRevision(noteId, selected.id);
+      onRestored(n);
+      onOpenChange(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "恢复失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange} title="历史版本" className="max-w-2xl">
+      <div className="space-y-3">
+        {list.isPending && <PageSpinner />}
+        {list.error && <ErrorText error={list.error} />}
+        {list.data && list.data.length === 0 && <p className="text-sm text-fg-muted">还没有历史版本。手动保存（Ctrl+S）或超过 10 分钟的自动保存会记录版本。</p>}
+        {list.data && list.data.length > 0 && (
+          <div className="flex gap-4">
+            <ul className="thin-scroll max-h-80 w-44 shrink-0 space-y-1 overflow-y-auto">
+              {list.data.map((r) => (
+                <li key={r.id}>
+                  <button
+                    type="button"
+                    onClick={() => setSelected(r)}
+                    className={cn(
+                      "w-full rounded px-2 py-1.5 text-left text-xs",
+                      selected?.id === r.id ? "bg-muted text-fg" : "text-fg-muted hover:bg-muted/60",
+                    )}
+                  >
+                    <span className="block">{relativeTime(r.createdAt)}</span>
+                    <span className="text-fg-subtle">{formatDateTime(r.createdAt)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="min-w-0 flex-1">
+              {selected ? (
+                <>
+                  <div className="thin-scroll max-h-64 overflow-y-auto rounded-md border border-border font-mono text-xs">
+                    {diff.map((line, i) => (
+                      <div
+                        key={i}
+                        className={cn(
+                          "px-2 py-0.5",
+                          line.kind === "add" && "bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-300",
+                          line.kind === "del" && "bg-red-100 text-red-900 dark:bg-red-950 dark:text-red-300",
+                        )}
+                      >
+                        <span className="mr-1 select-none text-fg-subtle">{line.kind === "add" ? "+" : line.kind === "del" ? "-" : " "}</span>
+                        {line.text || " "}
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-1 text-xs text-fg-subtle">
+                    红色 = 恢复后会删掉的内容；绿色 = 恢复后会回来的内容（相对当前已保存版本）
+                  </p>
+                  <div className="mt-3 flex justify-end">
+                    <Button variant="primary" size="sm" loading={busy} onClick={restore}>
+                      恢复到此版本
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-fg-muted">选择左侧版本查看差异</p>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </Dialog>
   );
 }
 

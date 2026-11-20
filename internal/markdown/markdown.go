@@ -35,6 +35,8 @@ type Result struct {
 	TOC  []Heading
 	// Files lists hashes of attachments referenced as /files/<hash>.
 	Files []string
+	// Wikilinks lists the titles of `[[title]]` references, deduplicated.
+	Wikilinks []string
 }
 
 var md = goldmark.New(
@@ -42,6 +44,7 @@ var md = goldmark.New(
 		extension.GFM,
 		extension.Footnote,
 		mathExtension{},
+		wikilinkExtension{},
 	),
 	goldmark.WithParserOptions(
 		parser.WithAutoHeadingID(),
@@ -64,11 +67,18 @@ func Render(src string) (Result, error) {
 
 	res := Result{}
 	seenFiles := map[string]bool{}
+	seenWiki := map[string]bool{}
 	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
 		}
 		switch node := n.(type) {
+		case *wikilink:
+			title := string(node.title)
+			if !seenWiki[title] {
+				seenWiki[title] = true
+				res.Wikilinks = append(res.Wikilinks, title)
+			}
 		case *ast.Heading:
 			if node.Level >= 2 && node.Level <= 4 {
 				id, _ := node.AttributeString("id")
@@ -122,6 +132,8 @@ func inlineText(n ast.Node, source []byte) string {
 			b.Write(t.Value)
 		case *mathInline:
 			b.Write(t.literal)
+		case *wikilink:
+			b.Write(t.title)
 		}
 		return ast.WalkContinue, nil
 	})
@@ -148,6 +160,8 @@ func plainText(doc ast.Node, source []byte) string {
 			b.Write(t.Value)
 		case *mathInline:
 			b.Write(t.literal)
+		case *wikilink:
+			b.Write(t.title)
 		case *ast.FencedCodeBlock, *ast.CodeBlock, *mathBlock:
 			lines := n.Lines()
 			for i := 0; i < lines.Len(); i++ {

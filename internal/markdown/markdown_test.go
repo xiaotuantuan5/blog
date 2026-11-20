@@ -104,3 +104,41 @@ func TestSummary(t *testing.T) {
 		t.Errorf("summary = %q", got)
 	}
 }
+
+func TestWikilinks(t *testing.T) {
+	res := render(t, "看 [[Go 并发]] 和 [[Go 并发]]，再看 [[ 不存在的笔记 ]]。普通 [链接](https://example.com) 不受影响。")
+	assertContains(t, res.HTML,
+		`<a class="wikilink" data-wikilink="Go 并发">Go 并发</a>`,
+		`<a class="wikilink" data-wikilink="不存在的笔记">不存在的笔记</a>`,
+		`href="https://example.com"`)
+	if len(res.Wikilinks) != 2 || res.Wikilinks[0] != "Go 并发" || res.Wikilinks[1] != "不存在的笔记" {
+		t.Fatalf("wikilinks = %+v", res.Wikilinks)
+	}
+	// Plain text keeps the title so search finds it.
+	assertContains(t, res.Text, "Go 并发")
+
+	// Not wikilinks: empty, lone brackets, unclosed.
+	res = render(t, "[[]] [[ ]]\n[[未闭合\n[普通文本]")
+	assertNotContains(t, res.HTML, `data-wikilink`)
+	if len(res.Wikilinks) != 0 {
+		t.Fatalf("wikilinks = %+v", res.Wikilinks)
+	}
+
+	// Short titles and titles with ']' are links (up to the first "]]").
+	res = render(t, "[[5]]")
+	assertContains(t, res.HTML, `data-wikilink="5"`)
+
+	// In headings and TOC.
+	res = render(t, "## 关于 [[Go 并发]] 的笔记\n")
+	assertContains(t, res.HTML, `id="关于-go-并发-的笔记"`)
+	if len(res.TOC) != 1 || res.TOC[0].Text != "关于 Go 并发 的笔记" {
+		t.Fatalf("toc = %+v", res.TOC)
+	}
+
+	// HTML-escaped titles survive.
+	res = render(t, "[[a<b & c]]")
+	assertContains(t, res.HTML, `data-wikilink="a&lt;b &amp; c"`)
+	if res.Wikilinks[0] != "a<b & c" {
+		t.Fatalf("wikilink = %q", res.Wikilinks[0])
+	}
+}

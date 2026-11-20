@@ -117,6 +117,9 @@ func serve(args []string) error {
 		slog.Warn("还没有管理员账号，请先运行：blog init-admin -data " + *dataDir)
 	}
 
+	// Background: purge trashed notes past the retention window.
+	go app.RunTrashCleanup(ctx)
+
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           server.New(app, server.Config{TrustProxy: *trustProxy}, web.Dist()),

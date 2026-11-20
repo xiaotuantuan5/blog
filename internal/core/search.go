@@ -62,7 +62,7 @@ func (a *App) ListNotes(ctx context.Context, f NoteFilter) (*NotePage, error) {
 
 	var (
 		joins []string
-		where = []string{"1 = 1"}
+		where = []string{"n.deleted_at IS NULL"}
 		args  []any
 	)
 	if f.PublicOnly {

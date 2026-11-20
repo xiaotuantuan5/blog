@@ -29,7 +29,7 @@ type NotebookInput struct {
 func (a *App) ListNotebooks(ctx context.Context) ([]Notebook, error) {
 	rows, err := a.DB.QueryContext(ctx, `
 		SELECT nb.id, nb.parent_id, nb.name, nb.sort, nb.created_at,
-		       (SELECT COUNT(*) FROM notes n WHERE n.notebook_id = nb.id)
+		       (SELECT COUNT(*) FROM notes n WHERE n.notebook_id = nb.id AND n.deleted_at IS NULL)
 		FROM notebooks nb ORDER BY nb.sort, nb.name COLLATE NOCASE`)
 	if err != nil {
 		return nil, err
@@ -133,11 +133,17 @@ func (a *App) DeleteNotebook(ctx context.Context, id int64) error {
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM notebooks WHERE parent_id = ?`, id).Scan(&children); err != nil {
 			return err
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM notes WHERE notebook_id = ?`, id).Scan(&notes); err != nil {
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM notes WHERE notebook_id = ? AND deleted_at IS NULL`, id).Scan(&notes); err != nil {
 			return err
 		}
 		if children > 0 || notes > 0 {
 			return conflict("笔记本不为空，请先移走其中的笔记和子笔记本")
+		}
+		// Trashed notes detach to "no notebook"; restoring lands them there.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE notes SET notebook_id = NULL WHERE notebook_id = ? AND deleted_at IS NOT NULL`, id); err != nil {
+			return err
 		}
 		_, err := tx.ExecContext(ctx, `DELETE FROM notebooks WHERE id = ?`, id)
 		return err

@@ -1,10 +1,11 @@
 import { Link } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { FileText, FolderTree, Globe, Hash, Paperclip, Plus } from "lucide-react";
+import { CalendarDays, FileText, FolderTree, Globe, Hash, Paperclip, Plus, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { keys, useMe, useSite } from "@/lib/queries";
 import { relativeTime, useTitle } from "@/lib/utils";
 import { SidebarToggle } from "@/layouts/WorkspaceLayout";
+import { Heatmap } from "@/components/Heatmap";
 import { Button, Empty, ErrorText, PageSpinner } from "@/components/ui";
 import { useCreateNote } from "@/features/notes/useCreateNote";
 
@@ -32,6 +33,7 @@ export function DashboardPage() {
         { label: "笔记本", value: stats.data.notebooks, icon: FolderTree },
         { label: "标签", value: stats.data.tags, icon: Hash, to: "/app/settings#tags" },
         { label: "附件", value: stats.data.files, icon: Paperclip },
+        { label: "回收站", value: stats.data.trash, icon: Trash2, to: "/app/trash" },
       ]
     : [];
 
@@ -49,7 +51,15 @@ export function DashboardPage() {
         </div>
 
         {stats.error && <ErrorText error={stats.error} />}
-        <div className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-5">
+        <div className="mb-4">
+          <Link
+            to="/app/daily"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-sm hover:bg-muted"
+          >
+            <CalendarDays className="h-4 w-4" /> 今天的日记
+          </Link>
+        </div>
+        <div className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           {cards.map((c) => {
             const body = (
               <>
@@ -68,6 +78,11 @@ export function DashboardPage() {
               </div>
             );
           })}
+        </div>
+
+        <h2 className="mb-2 text-sm font-semibold text-fg-muted">学习热力图</h2>
+        <div className="mb-8 rounded-lg border border-border p-4">
+          <Heatmap />
         </div>
 
         <h2 className="mb-2 text-sm font-semibold text-fg-muted">最近编辑</h2>

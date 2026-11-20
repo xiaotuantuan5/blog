@@ -168,7 +168,7 @@ func (a *App) FileIsPublic(ctx context.Context, fileID int64) (bool, error) {
 	var n int
 	err := a.DB.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM note_files nf JOIN notes n ON n.id = nf.note_id
-		WHERE nf.file_id = ? AND n.visibility = 'public'`, fileID).Scan(&n)
+		WHERE nf.file_id = ? AND n.visibility = 'public' AND n.deleted_at IS NULL`, fileID).Scan(&n)
 	return n > 0, err
 }
 

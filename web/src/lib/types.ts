@@ -20,8 +20,16 @@ export interface NoteSummary {
   publishedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Set while the note sits in the trash. */
+  deletedAt: string | null;
   /** HTML-escaped excerpt with <mark> around matches (search only). */
   snippet?: string;
+}
+
+export interface Backlink {
+  id: number;
+  title: string;
+  visibility: Visibility;
 }
 
 export interface Note extends NoteSummary {
@@ -29,6 +37,7 @@ export interface Note extends NoteSummary {
   contentMd: string;
   contentHtml: string;
   toc: Heading[];
+  backlinks: Backlink[] | null;
 }
 
 export interface NoteLink {
@@ -57,6 +66,8 @@ export interface NoteInput {
   visibility: Visibility;
   tags: string[];
   version?: number;
+  /** Manual saves always snapshot a revision. */
+  manual?: boolean;
 }
 
 export interface NoteFlags {
@@ -112,6 +123,66 @@ export interface Stats {
   notebooks: number;
   tags: number;
   files: number;
+  trash: number;
+}
+
+export interface TrashItem extends NoteSummary {
+  notebookName: string;
+}
+
+export interface Revision {
+  id: number;
+  noteId: number;
+  title: string;
+  contentMd: string;
+  createdAt: string;
+}
+
+export type AnnotationColor = "yellow" | "green" | "blue" | "red";
+
+export interface Annotation {
+  id: number;
+  noteId: number;
+  exact: string;
+  prefix: string;
+  suffix: string;
+  startOffset: number;
+  endOffset: number;
+  color: AnnotationColor;
+  commentMd: string;
+  commentHtml: string;
+  orphaned: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AnnotationListItem extends Annotation {
+  noteTitle: string;
+  notebookId: number | null;
+  noteUpdatedAt: string;
+}
+
+export interface AnnotationPage {
+  items: AnnotationListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface AnnotationInput {
+  exact: string;
+  prefix: string;
+  suffix: string;
+  startOffset: number;
+  endOffset: number;
+  color: AnnotationColor;
+  commentMd: string;
+  orphaned?: boolean;
+}
+
+export interface DayCount {
+  day: string;
+  count: number;
 }
 
 export interface UploadedFile {

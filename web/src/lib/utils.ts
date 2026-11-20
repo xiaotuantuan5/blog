@@ -41,6 +41,12 @@ export function useTitle(title: string | undefined) {
   }, [title]);
 }
 
+/** Today's date in the local timezone as YYYY-MM-DD. */
+export function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export async function copyText(text: string) {
   // navigator.clipboard needs a secure context (HTTPS or localhost).
   if (navigator.clipboard && window.isSecureContext) {

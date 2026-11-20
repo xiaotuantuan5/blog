@@ -244,3 +244,109 @@
 .thin-scroll {
   scrollbar-width: thin;
 }
+
+/* ---------- Phase 2: wikilinks, annotations, heatmap ---------- */
+
+a.wikilink {
+  color: var(--primary);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
+}
+a.wikilink:hover {
+  border-bottom-color: var(--primary);
+}
+.wikilink-missing {
+  color: var(--fg-subtle);
+  border-bottom: 1px dashed var(--fg-subtle);
+  cursor: help;
+}
+
+/* Annotation highlights: yellow 重点 / green 理解 / blue 待查 / red 疑问 */
+mark.ann {
+  padding: 0.05em 0;
+  border-radius: 2px;
+  color: inherit;
+  cursor: pointer;
+}
+mark.ann-yellow {
+  background: rgba(252, 211, 77, 0.55);
+}
+mark.ann-green {
+  background: rgba(110, 231, 183, 0.5);
+}
+mark.ann-blue {
+  background: rgba(125, 211, 252, 0.5);
+}
+mark.ann-red {
+  background: rgba(252, 165, 165, 0.55);
+}
+.dark mark.ann-yellow {
+  background: rgba(180, 130, 20, 0.45);
+}
+.dark mark.ann-green {
+  background: rgba(20, 120, 90, 0.5);
+}
+.dark mark.ann-blue {
+  background: rgba(30, 100, 150, 0.5);
+}
+.dark mark.ann-red {
+  background: rgba(160, 50, 50, 0.5);
+}
+.ann-hidden mark.ann {
+  background: transparent;
+}
+mark.ann.ann-flash {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+  transition: outline-color 0.9s ease;
+}
+
+/* Rendered annotation comments inside popovers and panels */
+.ann-comment :is(p, ul, ol, pre) {
+  margin: 0.25rem 0;
+}
+.ann-comment :is(h1, h2, h3, h4) {
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin: 0.35rem 0 0.15rem;
+}
+.ann-comment code {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  background: var(--muted);
+  border-radius: 3px;
+  padding: 0.05rem 0.3rem;
+}
+.ann-comment pre {
+  overflow-x: auto;
+  padding: 0.4rem 0.5rem;
+  background: var(--muted);
+  border-radius: 6px;
+}
+.ann-quote {
+  color: var(--fg-muted);
+}
+
+/* Heatmap cells */
+.heatmap-cell {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--muted);
+}
+.heatmap-l0 {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.heatmap-l1 {
+  background: color-mix(in srgb, var(--primary) 30%, var(--bg-soft));
+}
+.heatmap-l2 {
+  background: color-mix(in srgb, var(--primary) 55%, var(--bg-soft));
+}
+.heatmap-l3 {
+  background: color-mix(in srgb, var(--primary) 80%, var(--bg-soft));
+}
+.heatmap-l4 {
+  background: var(--primary);
+}

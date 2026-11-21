@@ -7,6 +7,7 @@ import type {
   Me,
   Note,
   NoteFlags,
+  NoteFormat,
   NoteInput,
   NotePage,
   Notebook,
@@ -125,7 +126,8 @@ export const api = {
   daily: (date: string) => request<Note>("GET", `/api/admin/daily/${date}`),
   heatmap: (from: string, to: string) =>
     request<DayCount[]>("GET", "/api/admin/stats/heatmap" + qs({ from, to })),
-  preview: (contentMd: string) => request<Preview>("POST", "/api/admin/preview", { contentMd }),
+  preview: (contentMd: string, format: NoteFormat = "md") =>
+    request<Preview>("POST", "/api/admin/preview", { contentMd, format }),
 
   // Annotations
   annotations: (noteId: number) => request<Annotation[]>("GET", `/api/admin/notes/${noteId}/annotations`),

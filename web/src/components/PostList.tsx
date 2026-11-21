@@ -15,6 +15,9 @@ export function PostList({ items }: { items: NoteSummary[] }) {
                   <Pin className="h-3 w-3" /> 置顶
                 </span>
               )}
+              {n.format === "html" && (
+                <span className="rounded border border-border px-1 text-[9px] font-semibold leading-4">HTML</span>
+              )}
               <time dateTime={n.publishedAt ?? undefined}>{formatDate(n.publishedAt)}</time>
             </div>
             <h2 className="text-lg font-semibold leading-snug">

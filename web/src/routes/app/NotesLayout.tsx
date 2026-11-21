@@ -165,6 +165,11 @@ export function NotesLayout() {
                     <div className="flex items-center gap-1.5">
                       {n.pinned && <Pin className="h-3 w-3 shrink-0 text-primary" aria-label="置顶" />}
                       <span className="min-w-0 flex-1 truncate text-sm font-medium">{n.title}</span>
+                      {n.format === "html" && (
+                        <span className="shrink-0 rounded border border-border px-1 text-[9px] font-semibold leading-4 text-fg-subtle">
+                          HTML
+                        </span>
+                      )}
                       {/* Menu and dialog events bubble through React portals; keep them away from the link. */}
                       <span
                         className="opacity-0 group-hover:opacity-100 has-[[data-state=open]]:opacity-100"

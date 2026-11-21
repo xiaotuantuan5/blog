@@ -5,6 +5,7 @@ import { languages } from "@codemirror/language-data";
 import { EditorView, keymap, type KeyBinding } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import { useIsDark } from "@/stores/ui";
+import type { NoteFormat } from "@/lib/types";
 import { toggleLinePrefix, wrapSelection } from "./commands";
 import { uploadIntoEditor } from "./upload";
 
@@ -15,6 +16,14 @@ export const formattingKeys: KeyBinding[] = [
   { key: "Mod-Shift-x", run: (v) => wrapSelection(v, "~~", "~~", "删除线") },
   { key: "Mod-Shift-k", run: (v) => wrapSelection(v, "[", "](https://)", "链接文字") },
   { key: "Mod-Shift-.", run: (v) => toggleLinePrefix(v, "> ") },
+];
+
+/** Same shortcuts, but wrapping in tags for notes written as HTML. */
+export const htmlFormattingKeys: KeyBinding[] = [
+  { key: "Mod-b", run: (v) => wrapSelection(v, "<b>", "</b>", "粗体") },
+  { key: "Mod-i", run: (v) => wrapSelection(v, "<em>", "</em>", "斜体") },
+  { key: "Mod-e", run: (v) => wrapSelection(v, "<code>", "</code>", "代码") },
+  { key: "Mod-Shift-k", run: (v) => wrapSelection(v, '<a href="https://">', "</a>", "链接文字") },
 ];
 
 const editorTheme = EditorView.theme({
@@ -30,6 +39,7 @@ export function MarkdownEditor({
   vim,
   editorRef,
   autoFocus,
+  format = "md",
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -37,9 +47,11 @@ export function MarkdownEditor({
   vim: boolean;
   editorRef: React.RefObject<ReactCodeMirrorRef | null>;
   autoFocus?: boolean;
+  format?: NoteFormat;
 }) {
   const dark = useIsDark();
   const [vimExt, setVimExt] = useState<Extension | null>(null);
+  const [htmlLang, setHtmlLang] = useState<Extension | null>(null);
 
   useEffect(() => {
     if (!vim) {
@@ -55,9 +67,28 @@ export function MarkdownEditor({
     };
   }, [vim]);
 
+  useEffect(() => {
+    if (format !== "html") {
+      setHtmlLang(null);
+      return;
+    }
+    let cancelled = false;
+    languages
+      .find((l) => l.name === "HTML")
+      ?.load()
+      .then((support) => {
+        if (!cancelled) setHtmlLang(support);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [format]);
+
   const extensions = useMemo(() => {
     const exts: Extension[] = [
-      markdown({ base: markdownLanguage, codeLanguages: languages }),
+      format === "html"
+        ? htmlLang ?? []
+        : markdown({ base: markdownLanguage, codeLanguages: languages }),
       EditorView.lineWrapping,
       editorTheme,
       keymap.of([
@@ -69,14 +100,14 @@ export function MarkdownEditor({
             return true;
           },
         },
-        ...formattingKeys,
+        ...(format === "html" ? htmlFormattingKeys : formattingKeys),
       ]),
       EditorView.domEventHandlers({
         paste(e, view) {
           const files = Array.from(e.clipboardData?.files ?? []);
           if (!files.length) return false;
           e.preventDefault();
-          uploadIntoEditor(view, files);
+          uploadIntoEditor(view, files, undefined, format);
           return true;
         },
         drop(e, view) {
@@ -84,7 +115,7 @@ export function MarkdownEditor({
           if (!files.length) return false;
           e.preventDefault();
           const pos = view.posAtCoords({ x: e.clientX, y: e.clientY }) ?? undefined;
-          uploadIntoEditor(view, files, pos);
+          uploadIntoEditor(view, files, pos, format);
           return true;
         },
       }),
@@ -92,7 +123,7 @@ export function MarkdownEditor({
     // Vim must come first so its keymap takes precedence.
     if (vimExt) exts.unshift(vimExt);
     return exts;
-  }, [onSave, vimExt]);
+  }, [onSave, vimExt, htmlLang, format]);
 
   return (
     <CodeMirror
@@ -103,7 +134,11 @@ export function MarkdownEditor({
       extensions={extensions}
       theme={dark ? "dark" : "light"}
       autoFocus={autoFocus}
-      placeholder="开始写作……支持 Markdown，可直接粘贴或拖入图片"
+      placeholder={
+        format === "html"
+          ? "粘贴 HTML 源码，右侧实时预览；保存时会自动清洗（脚本会被移除）"
+          : "开始写作……支持 Markdown，可直接粘贴或拖入图片"
+      }
       basicSetup={{
         lineNumbers: false,
         foldGutter: false,

@@ -24,7 +24,7 @@ import { api, ApiError } from "@/lib/api";
 import { diffLines } from "@/lib/diff";
 import { keys, useInvalidateNotes, useNotebooks } from "@/lib/queries";
 import { pushRecent } from "@/lib/recent";
-import type { AnnotationColor, Backlink, Note, NoteInput, Revision, Visibility } from "@/lib/types";
+import type { AnnotationColor, Backlink, Note, NoteFormat, NoteInput, Revision, Visibility } from "@/lib/types";
 import { cn, formatDateTime, relativeTime, useTitle } from "@/lib/utils";
 import { useUI, type EditorMode } from "@/stores/ui";
 import { SidebarToggle } from "@/layouts/WorkspaceLayout";
@@ -62,6 +62,7 @@ import {
 interface Form {
   title: string;
   contentMd: string;
+  format: NoteFormat;
   tags: string[];
   visibility: Visibility;
   slug: string;
@@ -83,6 +84,7 @@ function fromNote(n: Note): Form {
   return {
     title: n.title === UNTITLED ? "" : n.title,
     contentMd: n.contentMd,
+    format: n.format === "html" ? "html" : "md",
     tags: n.tags,
     visibility: n.visibility,
     slug: n.slug,
@@ -94,6 +96,7 @@ function sameForm(a: Form, b: Form) {
   return (
     a.title === b.title &&
     a.contentMd === b.contentMd &&
+    a.format === b.format &&
     a.visibility === b.visibility &&
     a.slug === b.slug &&
     a.summary === b.summary &&
@@ -197,6 +200,7 @@ function Editor({ note }: { note: Note }) {
     const input: NoteInput = {
       title: snapshot.title.trim() || UNTITLED,
       contentMd: snapshot.contentMd,
+      format: snapshot.format,
       tags: snapshot.tags,
       visibility: snapshot.visibility,
       slug: snapshot.slug,
@@ -286,14 +290,14 @@ function Editor({ note }: { note: Note }) {
     const seq = ++previewSeq.current;
     const t = setTimeout(async () => {
       try {
-        const p = await api.preview(form.contentMd);
+        const p = await api.preview(form.contentMd, form.format);
         if (seq === previewSeq.current) setPreview(p);
       } catch {
         /* keep last preview */
       }
     }, 300);
     return () => clearTimeout(t);
-  }, [form.contentMd, editorMode]);
+  }, [form.contentMd, form.format, editorMode]);
 
   const update = (patch: Partial<Form>) => setForm((f) => ({ ...f, ...patch }));
   const stableSave = useCallback(() => void save(), [save]);
@@ -484,10 +488,30 @@ function Editor({ note }: { note: Note }) {
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-muted">
           <NotebookPicker noteId={note.id} notebookId={note.notebookId} />
           <TagInput value={form.tags} onChange={(tags) => update({ tags })} />
+          <div
+            className="ml-auto flex items-center rounded-md border border-border p-0.5"
+            role="group"
+            aria-label="笔记格式"
+            title={form.format === "html" ? "HTML 模式：源码按 HTML 渲染，保存时自动清洗" : "Markdown 模式"}
+          >
+            {(["md", "html"] as const).map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => update({ format: f })}
+                className={cn(
+                  "rounded px-1.5 py-0.5 text-[10px] font-semibold leading-4 transition-colors",
+                  form.format === f ? "bg-primary/10 text-primary" : "text-fg-subtle hover:text-fg",
+                )}
+              >
+                {f === "md" ? "MD" : "HTML"}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      {editorMode !== "preview" && (
+      {editorMode !== "preview" && form.format === "md" && (
         <div className="shrink-0 border-y border-border px-3 py-1">
           <Toolbar editorRef={editorRef} />
         </div>
@@ -504,6 +528,7 @@ function Editor({ note }: { note: Note }) {
               vim={vim}
               editorRef={editorRef}
               autoFocus={!focusTitle}
+              format={form.format}
             />
           </div>
         )}
@@ -701,7 +726,12 @@ function RevisionsDialog({
                       selected?.id === r.id ? "bg-muted text-fg" : "text-fg-muted hover:bg-muted/60",
                     )}
                   >
-                    <span className="block">{relativeTime(r.createdAt)}</span>
+                    <span className="block">
+                      {r.format === "html" && (
+                        <span className="mr-1 rounded border border-border px-1 text-[9px] font-semibold leading-4 text-fg-subtle">HTML</span>
+                      )}
+                      {relativeTime(r.createdAt)}
+                    </span>
                     <span className="text-fg-subtle">{formatDateTime(r.createdAt)}</span>
                   </button>
                 </li>

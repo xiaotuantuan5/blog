@@ -1,5 +1,8 @@
 export type Visibility = "private" | "public";
 
+/** How the note source is interpreted: Markdown or authored HTML. */
+export type NoteFormat = "md" | "html";
+
 export interface Heading {
   level: number;
   id: string;
@@ -12,6 +15,7 @@ export interface NoteSummary {
   title: string;
   slug: string;
   summary: string;
+  format: NoteFormat;
   visibility: Visibility;
   pinned: boolean;
   favorite: boolean;
@@ -62,6 +66,7 @@ export interface NoteInput {
   slug: string;
   notebookId?: number | null;
   contentMd: string;
+  format?: NoteFormat;
   summary: string;
   visibility: Visibility;
   tags: string[];
@@ -135,6 +140,7 @@ export interface Revision {
   noteId: number;
   title: string;
   contentMd: string;
+  format?: NoteFormat;
   createdAt: string;
 }
 

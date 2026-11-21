@@ -19,6 +19,11 @@ const (
 	VisibilityPrivate = "private"
 	VisibilityPublic  = "public"
 
+	// FormatMD is a note written in Markdown; FormatHTML is authored as
+	// (sanitized) HTML — the shape generated notes usually come in.
+	FormatMD   = "md"
+	FormatHTML = "html"
+
 	summaryLen = 120
 	maxTags    = 20
 )
@@ -30,6 +35,7 @@ type NoteSummary struct {
 	Title       string   `json:"title"`
 	Slug        string   `json:"slug"`
 	Summary     string   `json:"summary"`
+	Format      string   `json:"format"`
 	Visibility  string   `json:"visibility"`
 	Pinned      bool     `json:"pinned"`
 	Favorite    bool     `json:"favorite"`
@@ -63,6 +69,7 @@ type NoteInput struct {
 	// they don't conflict with the editor's autosave.
 	NotebookID *int64   `json:"notebookId"`
 	ContentMD  string   `json:"contentMd"`
+	Format     string   `json:"format"`
 	Summary    string   `json:"summary"`
 	Visibility string   `json:"visibility"`
 	Tags       []string `json:"tags"`
@@ -155,6 +162,13 @@ func (in *NoteInput) clean() error {
 	default:
 		return invalid("无效的可见性")
 	}
+	switch in.Format {
+	case "":
+		in.Format = FormatMD
+	case FormatMD, FormatHTML:
+	default:
+		return invalid("无效的笔记格式")
+	}
 	tags, err := cleanTags(in.Tags)
 	if err != nil {
 		return err
@@ -163,12 +177,21 @@ func (in *NoteInput) clean() error {
 	return nil
 }
 
+// renderNote renders note source in the note's format. HTML notes skip the
+// Markdown pipeline entirely; [[wikilinks]] are only interpreted in Markdown.
+func renderNote(format, src string) (markdown.Result, error) {
+	if format == FormatHTML {
+		return markdown.RenderHTML(src)
+	}
+	return markdown.Render(src)
+}
+
 // CreateNote creates a note.
 func (a *App) CreateNote(ctx context.Context, in NoteInput) (*Note, error) {
 	if err := in.clean(); err != nil {
 		return nil, err
 	}
-	rendered, err := markdown.Render(in.ContentMD)
+	rendered, err := renderNote(in.Format, in.ContentMD)
 	if err != nil {
 		return nil, err
 	}
@@ -195,10 +218,10 @@ func (a *App) CreateNote(ctx context.Context, in NoteInput) (*Note, error) {
 		}
 		toc, _ := json.Marshal(nonNilTOC(rendered.TOC))
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO notes (notebook_id, title, slug, content_md, content_html, content_text, toc_json,
+			INSERT INTO notes (notebook_id, title, slug, format, content_md, content_html, content_text, toc_json,
 			                   summary, visibility, published_at, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			in.NotebookID, in.Title, in.Slug, in.ContentMD, html, rendered.Text, string(toc),
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			in.NotebookID, in.Title, in.Slug, in.Format, in.ContentMD, html, rendered.Text, string(toc),
 			in.Summary, in.Visibility, published, now, now)
 		if err != nil {
 			return err
@@ -224,7 +247,7 @@ func (a *App) UpdateNote(ctx context.Context, id int64, in NoteInput) (*Note, er
 	if err := in.clean(); err != nil {
 		return nil, err
 	}
-	rendered, err := markdown.Render(in.ContentMD)
+	rendered, err := renderNote(in.Format, in.ContentMD)
 	if err != nil {
 		return nil, err
 	}
@@ -264,11 +287,11 @@ func (a *App) UpdateNote(ctx context.Context, id int64, in NoteInput) (*Note, er
 		}
 		toc, _ := json.Marshal(nonNilTOC(rendered.TOC))
 		_, err = tx.ExecContext(ctx, `
-			UPDATE notes SET title = ?, slug = ?, content_md = ?, content_html = ?,
+			UPDATE notes SET title = ?, slug = ?, format = ?, content_md = ?, content_html = ?,
 			       content_text = ?, toc_json = ?, summary = ?, visibility = ?, published_at = ?,
 			       updated_at = ?, version = version + 1
 			WHERE id = ?`,
-			in.Title, in.Slug, in.ContentMD, html, rendered.Text, string(toc),
+			in.Title, in.Slug, in.Format, in.ContentMD, html, rendered.Text, string(toc),
 			in.Summary, in.Visibility, published, now, id)
 		if err != nil {
 			return err
@@ -460,9 +483,9 @@ func syncNoteRefs(ctx context.Context, tx *sql.Tx, id int64, tags, files []strin
 	return nil
 }
 
-const noteCols = `n.id, n.notebook_id, n.title, n.slug, n.summary, substr(n.content_text, 1, 200),
-	n.visibility, n.pinned, n.favorite, n.version, n.published_at, n.created_at, n.updated_at, n.deleted_at,
-	COALESCE((SELECT group_concat(t.name, char(31)) FROM note_tags nt JOIN tags t ON t.id = nt.tag_id WHERE nt.note_id = n.id), '')`
+const noteCols = `n.id, n.notebook_id, n.title, n.slug, n.summary, n.format, substr(n.content_text, 1, 200),
+		n.visibility, n.pinned, n.favorite, n.version, n.published_at, n.created_at, n.updated_at, n.deleted_at,
+		COALESCE((SELECT group_concat(t.name, char(31)) FROM note_tags nt JOIN tags t ON t.id = nt.tag_id WHERE nt.note_id = n.id), '')`
 
 type scanner interface{ Scan(dest ...any) error }
 
@@ -472,7 +495,7 @@ func scanSummary(row scanner, extra ...any) (NoteSummary, string, error) {
 		textPre string
 		tags    string
 	)
-	dest := []any{&s.ID, &s.NotebookID, &s.Title, &s.Slug, &s.Summary, &textPre,
+	dest := []any{&s.ID, &s.NotebookID, &s.Title, &s.Slug, &s.Summary, &s.Format, &textPre,
 		&s.Visibility, &s.Pinned, &s.Favorite, &s.Version, &s.PublishedAt, &s.CreatedAt, &s.UpdatedAt,
 		&s.DeletedAt, &tags}
 	err := row.Scan(append(dest, extra...)...)

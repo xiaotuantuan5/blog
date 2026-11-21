@@ -1,6 +1,7 @@
 import type { EditorView } from "@codemirror/view";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import type { NoteFormat } from "@/lib/types";
 
 let seq = 0;
 
@@ -8,13 +9,19 @@ function escapeLabel(s: string) {
   return s.replace(/[[\]]/g, "");
 }
 
+function escapeAttr(s: string) {
+  return s.replace(/"/g, "");
+}
+
 /**
- * Uploads files and inserts Markdown links at the cursor. A placeholder is
- * inserted first and replaced once the upload finishes, so typing can continue.
+ * Uploads files and inserts links at the cursor, in the note's format
+ * (Markdown or HTML). A placeholder is inserted first and replaced once the
+ * upload finishes, so typing can continue.
  */
-export async function uploadIntoEditor(view: EditorView, files: File[], pos?: number) {
+export async function uploadIntoEditor(view: EditorView, files: File[], pos?: number, format: NoteFormat = "md") {
   for (const file of files) {
-    const marker = `![上传中 ${escapeLabel(file.name)} #${++seq}]()`;
+    const label = `上传中 ${escapeLabel(file.name)} #${++seq}`;
+    const marker = format === "html" ? `<!--${label}-->` : `![${label}]()`;
     const at = pos ?? view.state.selection.main.head;
     view.dispatch({ changes: { from: at, insert: marker + "\n" }, userEvent: "input" });
     pos = undefined;
@@ -30,7 +37,11 @@ export async function uploadIntoEditor(view: EditorView, files: File[], pos?: nu
     try {
       const f = await api.upload(file);
       const name = escapeLabel(file.name.replace(/\.[^.]+$/, "")) || "文件";
-      replace(f.isImage ? `![${name}](${f.url})` : `[${escapeLabel(f.filename)}](${f.url})`);
+      if (format === "html") {
+        replace(f.isImage ? `<img src="${escapeAttr(f.url)}" alt="${escapeAttr(name)}">` : `<a href="${escapeAttr(f.url)}">${escapeLabel(f.filename)}</a>`);
+      } else {
+        replace(f.isImage ? `![${name}](${f.url})` : `[${escapeLabel(f.filename)}](${f.url})`);
+      }
     } catch (e) {
       replace("");
       toast.error(`${file.name} 上传失败：${e instanceof Error ? e.message : e}`);
@@ -39,14 +50,14 @@ export async function uploadIntoEditor(view: EditorView, files: File[], pos?: nu
 }
 
 /** Opens a file picker and uploads the chosen files into the editor. */
-export function pickAndUpload(view: EditorView, accept = "image/*,.pdf,.zip,.txt,.md") {
+export function pickAndUpload(view: EditorView, accept = "image/*,.pdf,.zip,.txt,.md", format: NoteFormat = "md") {
   const input = document.createElement("input");
   input.type = "file";
   input.accept = accept;
   input.multiple = true;
   input.onchange = () => {
     const files = Array.from(input.files ?? []);
-    if (files.length) uploadIntoEditor(view, files);
+    if (files.length) uploadIntoEditor(view, files, undefined, format);
   };
   input.click();
 }

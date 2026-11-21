@@ -198,10 +198,16 @@ func (a *App) Backlinks(ctx context.Context, id int64) ([]Backlink, error) {
 	return list, rows.Err()
 }
 
-// RenderPreview renders Markdown like the editor preview, with wikilinks
+// RenderPreview renders note source like the editor preview, with wikilinks
 // resolved against the notes table.
-func (a *App) RenderPreview(ctx context.Context, src string) (markdown.Result, error) {
-	res, err := markdown.Render(src)
+func (a *App) RenderPreview(ctx context.Context, format, src string) (markdown.Result, error) {
+	if format == "" {
+		format = FormatMD
+	}
+	if format != FormatMD && format != FormatHTML {
+		return markdown.Result{}, invalid("无效的笔记格式")
+	}
+	res, err := renderNote(format, src)
 	if err != nil {
 		return markdown.Result{}, err
 	}

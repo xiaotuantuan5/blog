@@ -78,6 +78,7 @@
 
 **笔记**
 - 新建、编辑、删除笔记，Markdown 格式
+- HTML 笔记：编辑器可切换 MD / HTML，源码按 HTML 渲染（适合粘贴生成的 HTML 报告），保存时清洗（脚本、事件属性一律剥除；布局元素、内联 `style` 和 `<style>` 块保留）；目录、搜索摘要从 DOM 提取，`[[双链]]` 不生效
 - 笔记本：树形目录，按名称排序；可把笔记或笔记本拖到另一个笔记本上来移动
 - 标签：多标签，标签页聚合
 - 状态：私有 / 公开；可置顶、可收藏
@@ -183,6 +184,7 @@ notes (
   notebook_id   INTEGER REFERENCES notebooks(id),
   title         TEXT NOT NULL,
   slug          TEXT UNIQUE NOT NULL,       -- 公开访问地址
+  format        TEXT NOT NULL DEFAULT 'md', -- md | html，源码格式
   content_md    TEXT NOT NULL DEFAULT '',
   content_html  TEXT NOT NULL DEFAULT '',   -- 保存时渲染好
   summary       TEXT NOT NULL DEFAULT '',   -- 手填或自动截取
@@ -201,7 +203,7 @@ tags (id, name UNIQUE)
 note_tags (note_id, tag_id, PRIMARY KEY(note_id, tag_id))
 
 note_links (source_id, target_id, PRIMARY KEY(source_id, target_id))  -- 双链
-note_revisions (id, note_id, title, content_md, created_at)            -- 历史版本
+note_revisions (id, note_id, title, content_md, format, created_at)    -- 历史版本
 
 files (id, hash UNIQUE, filename, mime, size, created_at)
 note_files (note_id, file_id)
@@ -283,7 +285,7 @@ DELETE /api/admin/notes/:id/purge             彻底删除
 GET    /api/admin/notes/:id/revisions
 POST   /api/admin/notes/:id/revisions/:rid/restore
 GET    /api/admin/daily/:date                 获取或创建某天的日记
-POST   /api/admin/preview                     Markdown 预览
+POST   /api/admin/preview                     预览（body 带 format: md | html）
 
 CRUD   /api/admin/notebooks
 GET    /api/admin/tags     PUT/DELETE /api/admin/tags/:id

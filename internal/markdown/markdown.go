@@ -193,9 +193,15 @@ type ids struct{ used map[string]int }
 func newIDs() *ids { return &ids{used: map[string]int{}} }
 
 func (s *ids) Generate(value []byte, _ ast.NodeKind) []byte {
+	return []byte(uniqueSlug(slugify(string(value)), s.used))
+}
+
+// slugify folds a heading's text into an id-safe slug, keeping letters and
+// digits (Chinese included) and turning separators into dashes.
+func slugify(value string) string {
 	var b strings.Builder
 	lastDash := false
-	for _, r := range strings.ToLower(string(value)) {
+	for _, r := range strings.ToLower(value) {
 		switch {
 		case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_':
 			b.WriteRune(r)
@@ -211,19 +217,24 @@ func (s *ids) Generate(value []byte, _ ast.NodeKind) []byte {
 	if base == "" {
 		base = "heading"
 	}
+	return base
+}
+
+// uniqueSlug deduplicates a slug within one document.
+func uniqueSlug(base string, used map[string]int) string {
 	id := base
-	if n, ok := s.used[base]; ok {
+	if n, ok := used[base]; ok {
 		for {
 			n++
 			id = base + "-" + strconv.Itoa(n)
-			if _, taken := s.used[id]; !taken {
+			if _, taken := used[id]; !taken {
 				break
 			}
 		}
-		s.used[base] = n
+		used[base] = n
 	}
-	s.used[id] = 0
-	return []byte(id)
+	used[id] = 0
+	return id
 }
 
 func (s *ids) Put(value []byte) { s.used[string(value)] = 0 }

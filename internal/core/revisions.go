@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/xiaotuantuan5/blog/internal/db"
-	"github.com/xiaotuantuan5/blog/internal/markdown"
 )
 
 // Revisions snapshot a note before each meaningful save so content can be
@@ -25,6 +24,7 @@ type Revision struct {
 	NoteID    int64   `json:"noteId"`
 	Title     string  `json:"title"`
 	ContentMD string  `json:"contentMd"`
+	Format    string  `json:"format"`
 	CreatedAt db.Time `json:"createdAt"`
 }
 
@@ -34,9 +34,10 @@ func snapshotRevision(ctx context.Context, tx *sql.Tx, id int64, force bool) err
 	var (
 		title   string
 		content string
+		format  string
 	)
-	err := tx.QueryRowContext(ctx, `SELECT title, content_md FROM notes WHERE id = ?`, id).
-		Scan(&title, &content)
+	err := tx.QueryRowContext(ctx, `SELECT title, content_md, format FROM notes WHERE id = ?`, id).
+		Scan(&title, &content, &format)
 	if err != nil {
 		return err
 	}
@@ -53,8 +54,8 @@ func snapshotRevision(ctx context.Context, tx *sql.Tx, id int64, force bool) err
 		}
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO note_revisions (note_id, title, content_md, created_at) VALUES (?, ?, ?, ?)`,
-		id, title, content, db.Now()); err != nil {
+		`INSERT INTO note_revisions (note_id, title, content_md, format, created_at) VALUES (?, ?, ?, ?, ?)`,
+		id, title, content, format, db.Now()); err != nil {
 		return err
 	}
 	// Keep the newest maxRevisions snapshots.
@@ -67,7 +68,7 @@ func snapshotRevision(ctx context.Context, tx *sql.Tx, id int64, force bool) err
 // ListRevisions returns a note's revisions, newest first.
 func (a *App) ListRevisions(ctx context.Context, noteID int64) ([]Revision, error) {
 	rows, err := a.DB.QueryContext(ctx,
-		`SELECT id, note_id, title, content_md, created_at FROM note_revisions
+		`SELECT id, note_id, title, content_md, format, created_at FROM note_revisions
 		 WHERE note_id = ? ORDER BY id DESC LIMIT ?`, noteID, maxRevisions)
 	if err != nil {
 		return nil, err
@@ -76,7 +77,7 @@ func (a *App) ListRevisions(ctx context.Context, noteID int64) ([]Revision, erro
 	list := []Revision{}
 	for rows.Next() {
 		var r Revision
-		if err := rows.Scan(&r.ID, &r.NoteID, &r.Title, &r.ContentMD, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.NoteID, &r.Title, &r.ContentMD, &r.Format, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, r)
@@ -100,15 +101,18 @@ func (a *App) RestoreRevision(ctx context.Context, noteID, revID int64) (*Note, 
 		}
 		var rev Revision
 		err := tx.QueryRowContext(ctx,
-			`SELECT id, note_id, title, content_md, created_at FROM note_revisions WHERE id = ?`, revID).
-			Scan(&rev.ID, &rev.NoteID, &rev.Title, &rev.ContentMD, &rev.CreatedAt)
+			`SELECT id, note_id, title, content_md, format, created_at FROM note_revisions WHERE id = ?`, revID).
+			Scan(&rev.ID, &rev.NoteID, &rev.Title, &rev.ContentMD, &rev.Format, &rev.CreatedAt)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && rev.NoteID != noteID) {
 			return ErrNotFound
 		} else if err != nil {
 			return err
 		}
+		if rev.Format == "" {
+			rev.Format = FormatMD
+		}
 
-		res, err := markdown.Render(rev.ContentMD)
+		res, err := renderNote(rev.Format, rev.ContentMD)
 		if err != nil {
 			return err
 		}
@@ -121,10 +125,10 @@ func (a *App) RestoreRevision(ctx context.Context, noteID, revID int64) (*Note, 
 		}
 		toc, _ := json.Marshal(nonNilTOC(res.TOC))
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE notes SET title = ?, content_md = ?, content_html = ?, content_text = ?,
+			UPDATE notes SET title = ?, format = ?, content_md = ?, content_html = ?, content_text = ?,
 			       toc_json = ?, updated_at = ?, version = version + 1
 			WHERE id = ?`,
-			rev.Title, rev.ContentMD, html, res.Text, string(toc), db.Now(), noteID); err != nil {
+			rev.Title, rev.Format, rev.ContentMD, html, res.Text, string(toc), db.Now(), noteID); err != nil {
 			return err
 		}
 		// Tags and metadata stay as they are; only files and links follow content.

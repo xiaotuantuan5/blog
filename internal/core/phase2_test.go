@@ -72,7 +72,7 @@ func TestWikilinksAndBacklinks(t *testing.T) {
 	}
 
 	// Preview resolves too.
-	res, err := a.RenderPreview(ctx, "[[Go 并发]]")
+	res, err := a.RenderPreview(ctx, "", "[[Go 并发]]")
 	if err != nil {
 		t.Fatal(err)
 	}

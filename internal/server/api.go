@@ -366,12 +366,13 @@ func (s *Server) handleHeatmap(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ContentMD string `json:"contentMd"`
+		Format    string `json:"format"`
 	}
 	if err := decodeJSON(w, r, &in); err != nil {
 		writeError(w, r, err)
 		return
 	}
-	res, err := s.app.RenderPreview(r.Context(), in.ContentMD)
+	res, err := s.app.RenderPreview(r.Context(), in.Format, in.ContentMD)
 	if err != nil {
 		writeError(w, r, err)
 		return
